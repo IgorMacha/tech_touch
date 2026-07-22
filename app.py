@@ -51,10 +51,19 @@ CRITERIOS = {
 def _databricks_conn():
     from databricks import sql
     cfg = st.secrets["databricks"]
+    # Aceita os dois formatos de chave (server_hostname/http_path/access_token
+    # ou DATABRICKS_HOST/DATABRICKS_TOKEN/DATABRICKS_WAREHOUSE_ID).
+    host = (cfg.get("server_hostname") or cfg.get("DATABRICKS_HOST") or "")
+    host = host.replace("https://", "").replace("http://", "").strip().rstrip("/")
+    http_path = cfg.get("http_path")
+    if not http_path:
+        wid = (cfg.get("DATABRICKS_WAREHOUSE_ID") or "").strip()
+        http_path = f"/sql/1.0/warehouses/{wid}"
+    token = cfg.get("access_token") or cfg.get("DATABRICKS_TOKEN")
     return sql.connect(
-        server_hostname=cfg["server_hostname"],
-        http_path=cfg["http_path"],
-        access_token=cfg["access_token"],
+        server_hostname=host,
+        http_path=http_path,
+        access_token=token,
     )
 
 
