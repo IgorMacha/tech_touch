@@ -1,0 +1,10 @@
+# Segredos - NUNCA versionar
+.streamlit/secrets.toml
+*.env
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
