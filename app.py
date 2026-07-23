@@ -39,7 +39,7 @@ VIDEOS_DIR = _detectar_videos_dir()
 VIDEOS_BASE_URL = ""
 
 # IA (opcional)
-MODELOS_IA = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
+MODELO_IA_PADRAO = "gpt-4o-mini"
 TONS_IA = ["Próximo e caloroso", "Objetivo e direto", "Formal e institucional"]
 
 SYSTEM_TOM_COBLI = (
@@ -550,11 +550,16 @@ def gerar_mensagem_ia(model, fatos, base, objetivo, tom, curto=True):
     user = (
         f"Objetivo da mensagem: {objetivo}\n"
         f"Tom desejado: {tom}\n\n"
-        f"FATOS REAIS (use somente estes; não invente nada além disto):\n{fatos_txt}\n\n"
-        f"RASCUNHO BASE (melhore a clareza, a interpretação e a personalização, "
-        f"mas mantenha todos os fatos, números e links exatamente como estão):\n{base}"
+        f"FATOS REAIS DO CLIENTE (vindos do Databricks; use SOMENTE estes, não invente "
+        f"nenhum número, nome, data ou link):\n{fatos_txt}\n\n"
+        f"RASCUNHO BASE (já traz a intenção e os pedidos corretos: dados de instalação, "
+        f"link de acesso, menção aos vídeos, itens pendentes). Mantenha a mesma intenção e "
+        f"todos os fatos, números e links exatamente como estão):\n{base}"
         f"{regra_curto}\n\n"
-        f"Escreva a versão final da mensagem de WhatsApp."
+        f"Tarefa: reescreva a mensagem final no tom da Cobli, interpretando de forma breve o "
+        f"momento do cliente a partir dos fatos (ex.: o que já avançou e o que priorizar agora), "
+        f"sem repetir todos os números crus e sem inventar nada. Não deixe de fazer os pedidos e "
+        f"não remova links. Responda apenas com o texto final para WhatsApp."
     )
     resp = client.chat.completions.create(
         model=model, temperature=0.5,
@@ -692,11 +697,11 @@ with st.sidebar:
         help="Padrão usa os textos prontos. IA gera tudo com o ChatGPT, no tom da Cobli, já analisado.",
     )
     modo_ia = modo.startswith("IA")
+    modelo_ia = MODELO_IA_PADRAO
     if ia_disponivel():
-        modelo_ia = st.selectbox("Modelo de IA", MODELOS_IA, index=0)
         tom_ia = st.selectbox("Tom da mensagem", TONS_IA, index=0)
     else:
-        modelo_ia, tom_ia = MODELOS_IA[0], TONS_IA[0]
+        tom_ia = TONS_IA[0]
         st.caption("Chave da OpenAI ausente em [openai] no secrets. O modo IA cai para o padrão até você configurá-la.")
     buscar = st.button("Analisar cliente", type="primary", use_container_width=True)
 
