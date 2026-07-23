@@ -438,22 +438,23 @@ def botao_whatsapp(texto, telefone, key):
         st.caption("Informe o telefone do cliente na barra lateral para gerar o link de envio.")
 
 
-def mostrar_videos(cols, base_url):
-    """Players + download dos vídeos dos critérios em `cols`."""
-    vids = [VIDEO_MAP[c] for c in cols if c in VIDEO_MAP]
+def mostrar_videos(cols, base_url, prefix=""):
+    """Players + download dos vídeos dos critérios em `cols`.
+    `prefix` garante chaves únicas quando a mesma seção se repete em abas diferentes."""
+    vids = [(c, VIDEO_MAP[c]) for c in cols if c in VIDEO_MAP]
     if not vids:
         return
     st.markdown("**Vídeos para anexar no WhatsApp**")
     st.caption("O wa.me abre a conversa com o texto pronto. Anexe os vídeos abaixo (baixe ou arraste). "
                "Se você hospedar a pasta de vídeos, os links já entram no texto automaticamente.")
-    for arquivo, titulo in vids:
+    for col, (arquivo, titulo) in vids:
         p = video_path(arquivo)
         nome_arq = os.path.basename(arquivo)
         st.markdown(f"*{titulo}*")
         if p:
             st.video(p)
             with open(p, "rb") as fh:
-                st.download_button(f"Baixar · {titulo}", fh, file_name=nome_arq, key=f"dl_{arquivo}")
+                st.download_button(f"Baixar · {titulo}", fh, file_name=nome_arq, key=f"dl_{prefix}_{col}")
         elif video_url(arquivo, base_url):
             st.write(video_url(arquivo, base_url))
         else:
@@ -581,7 +582,7 @@ with tab_msg:
             if gaps:
                 st.caption(f"{len(gaps)} feature(s) pendente(s) no Basic Value.")
                 st.divider()
-                mostrar_videos([c for c, _ in gaps], base_url)
+                mostrar_videos([c for c, _ in gaps], base_url, prefix="gaps")
 
 # ============================ TAB 3 ============================
 with tab_fases:
@@ -594,4 +595,4 @@ with tab_fases:
             st.text_area(f"fase_{i}", texto, height=max(220, len(texto) // 2), label_visibility="collapsed")
             botao_whatsapp(texto, telefone_final, f"wa_fase_{i}")
             pend_cols = [c for c, _ in (gaps_abertos(bv) if i == 3 else pendentes_da_fase(i, bv))]
-            mostrar_videos(pend_cols, base_url)
+            mostrar_videos(pend_cols, base_url, prefix=f"fase{i}")
