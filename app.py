@@ -129,12 +129,48 @@ BV_COLS = [
 ]
 
 
-def fetch_deal(deal_id: str) -> dict:
-    deal_id = deal_id.strip()
+def _bv_por_company(company_id: str) -> pd.DataFrame:
+    return run_databricks(f"""
+        SELECT {", ".join(BV_COLS)}
+        FROM gold.customer_success_reports.basic_value
+        WHERE company_id = '{company_id}' AND data_atual_flag = true
+        LIMIT 1
+    """)
 
+
+def fetch_client(hs_id: str) -> dict:
+    """Aceita ID de empresa (HubSpot, objeto 0-2) OU ID de negócio (deal, 0-3).
+    Resolve para company_id e busca Basic Value + instalação."""
+    hs_id = hs_id.strip()
+
+    # 1) Tenta como company_id direto (é o que vem da URL de um registro de Empresa)
+    bv = _bv_por_company(hs_id)
+    company_id = hs_id if not bv.empty else None
+
+    # 2) Se não achou, tenta resolver como deal_id pela dimensão-mestre
+    if company_id is None:
+        r = run_databricks(f"""
+            SELECT MAX(DEAL_ASSOCIATED_COMPANY_ID) AS company_id
+            FROM dimensions.dim_client_info
+            WHERE DEAL_ID = '{hs_id}' OR DEAL_ASSOCIATED_COMPANY_ID = '{hs_id}'
+        """)
+        company_id = (r.iloc[0]["company_id"] if not r.empty else None) or None
+
+        # 3) Último fallback: supply_cube por deal_id
+        if not company_id:
+            r2 = run_databricks(f"""
+                SELECT MAX(company_id) AS company_id
+                FROM gold.cubo_supply.supply_cube
+                WHERE deal_id = '{hs_id}'
+            """)
+            company_id = (r2.iloc[0]["company_id"] if not r2.empty else None) or None
+
+        if company_id:
+            bv = _bv_por_company(company_id)
+
+    # Instalação: casa por company_id (ou pelo id informado como deal)
     sup = run_databricks(f"""
         SELECT
-          MAX(company_id)   AS company_id,
           MAX(fleet_id)     AS fleet_id,
           MAX(company_name) AS company_name,
           MAX(CASE WHEN instalacao__data_hora_marcada IS NOT NULL
@@ -150,30 +186,12 @@ def fetch_deal(deal_id: str) -> dict:
           MAX(instalacao__cliente_telefone)                        AS cliente_telefone,
           MAX(instalacao__cliente_email)                           AS cliente_email
         FROM gold.cubo_supply.supply_cube
-        WHERE deal_id = '{deal_id}'
+        WHERE company_id = '{company_id or ''}' OR deal_id = '{hs_id}'
     """)
     sup = sup.iloc[0].to_dict() if not sup.empty else {}
 
-    company_id = sup.get("company_id")
-    if not company_id:
-        c = run_databricks(f"""
-            SELECT MAX(associated_company_id) AS company_id
-            FROM gold.cubo_contratos.fct_contract_products
-            WHERE deal_id = '{deal_id}' OR ticket_associated_deal_id = '{deal_id}'
-        """)
-        company_id = c.iloc[0]["company_id"] if not c.empty else None
-
-    bv = pd.DataFrame()
-    if company_id:
-        bv = run_databricks(f"""
-            SELECT {", ".join(BV_COLS)}
-            FROM gold.customer_success_reports.basic_value
-            WHERE company_id = '{company_id}' AND data_atual_flag = true
-            LIMIT 1
-        """)
     bv = bv.iloc[0].to_dict() if not bv.empty else {}
-
-    return {"deal_id": deal_id, "company_id": company_id, "supply": sup, "bv": bv}
+    return {"hs_id": hs_id, "company_id": company_id, "supply": sup, "bv": bv}
 
 
 # ----------------------------------------------------------------------------
@@ -363,21 +381,25 @@ st.caption("Do kickoff aos 90 dias. Meta: Basic Value ≥ 3. A partir do Deal ID
 
 with st.sidebar:
     st.header("Dados do cliente")
-    deal_id = st.text_input("Deal ID (HubSpot)", placeholder="ex.: 47596831034")
+    hs_id = st.text_input(
+        "ID da empresa (HubSpot)",
+        placeholder="ex.: 34318770456",
+        help="É o número no fim da URL do registro de Empresa no HubSpot (.../record/0-2/ESTE_NÚMERO). Também aceita o ID de um negócio (deal).",
+    )
     nome_cliente = st.text_input("Nome do contato", placeholder="ex.: João")
     analista = st.text_input("Seu nome (analista)", value=ANALISTA_PADRAO)
     buscar = st.button("Analisar cliente", type="primary", use_container_width=True)
 
 if not buscar:
-    st.info("Preencha o Deal ID na barra lateral e clique em **Analisar cliente**.")
+    st.info("Cole o ID da empresa (HubSpot) na barra lateral e clique em **Analisar cliente**.")
     st.stop()
 
-if not deal_id.strip():
-    st.error("Informe o Deal ID.")
+if not hs_id.strip():
+    st.error("Informe o ID da empresa.")
     st.stop()
 
 try:
-    dados = fetch_deal(deal_id)
+    dados = fetch_client(hs_id)
 except Exception as e:
     st.error(f"Erro ao consultar o Databricks: {e}")
     st.stop()
@@ -388,7 +410,10 @@ nome_final = nome_cliente.strip() or (sup.get("cliente_nome") or "").strip()
 analista_final = analista.strip() or ANALISTA_PADRAO
 
 if not dados["company_id"]:
-    st.warning("Não encontrei empresa associada a este Deal ID no Databricks. Confira o número.")
+    st.warning(
+        "Não encontrei essa empresa no Databricks. Confira se o número é o ID da Empresa "
+        "no HubSpot (o final da URL em registros de Empresa, formato .../record/0-2/NÚMERO)."
+    )
 
 score = bv.get("basic_value_score")
 dias = dias_de_jornada(bv)
@@ -398,7 +423,7 @@ gaps = gaps_abertos(bv) if bv else []
 usuario_ativo = tem_usuario_ativo(bv)
 
 # ---- Cabeçalho ----
-st.subheader(empresa or f"Deal {dados['deal_id']}")
+st.subheader(empresa or f"Empresa {dados['hs_id']}")
 c1, c2, c3, c4 = st.columns(4)
 sv = _to_float(score)
 c1.metric("Basic Value", f"{sv:.2f}" if sv is not None else "—", f"meta {META_BASIC_VALUE:.0f}")
