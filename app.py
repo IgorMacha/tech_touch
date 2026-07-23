@@ -299,6 +299,12 @@ def msg_fase(indice, nome, empresa, score):
     saud = f"Oi, {nome}, tudo bem?" if nome else "Oi, tudo bem?"
     emp = empresa or "a sua frota"
     s = _to_float(score)
+    if s is None:
+        status_bv = "Vamos revisar juntos onde sua frota está no Basic Value e o que falta para a meta de 3."
+    elif s < 3:
+        status_bv = f"Sua frota já está em {s:.1f} de Basic Value e a meta é chegar a 3.".replace(".", ",", 1)
+    else:
+        status_bv = f"Sua frota já está em {s:.1f} de Basic Value, acima da meta de 3.".replace(".", ",", 1)
     textos = [
         # Fase 1
         f"{saud}\n\nBoas-vindas à Cobli! Nas próximas semanas vou te acompanhar de perto "
@@ -314,9 +320,8 @@ def msg_fase(indice, nome, empresa, score):
         f"velocidade, regras de política de frota, geofences e checklists. É o que transforma os "
         f"dados da frota em ação. Posso te guiar item a item essa semana, no seu ritmo.",
         # Fase 4
-        f"{saud}\n\nEstamos fechando seus primeiros 90 dias na Cobli. Sua frota já está em "
-        f"{s:.1f} de Basic Value" + (" e a meta é chegar a 3." if s is not None and s < 3 else ", acima da meta de 3.")
-        + " Bora revisar juntos os últimos ajustes e deixar tudo redondo antes de encerrar o onboarding?",
+        f"{saud}\n\nEstamos fechando seus primeiros 90 dias na Cobli. {status_bv} "
+        f"Bora revisar juntos os últimos ajustes e deixar tudo redondo antes de encerrar o onboarding?",
     ]
     return textos[indice]
 
