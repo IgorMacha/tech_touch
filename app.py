@@ -212,6 +212,32 @@ def _to_float(v):
         return None
 
 
+_EMP_SIGLAS = {"LTDA", "ME", "EPP", "EIRELI", "MEI", "SA", "CIA", "S.A.", "S/A", "LTDA."}
+_EMP_CONECTORES = {"de", "da", "do", "das", "dos", "e", "em"}
+
+
+def format_empresa(nome):
+    """Formata o nome da empresa quando vem todo em maiúsculas, mantendo siglas."""
+    nome = (nome or "").strip()
+    if not nome:
+        return ""
+    letras = [c for c in nome if c.isalpha()]
+    # só ajusta se estiver majoritariamente em maiúsculas
+    if letras and sum(c.isupper() for c in letras) / len(letras) < 0.7:
+        return nome
+    out = []
+    for w in nome.split():
+        base = w.upper().strip(".")
+        if w.upper() in _EMP_SIGLAS or base in _EMP_SIGLAS:
+            out.append(w.upper())
+        elif w.lower() in _EMP_CONECTORES:
+            out.append(w.lower())
+        else:
+            out.append(w.capitalize())
+    s = " ".join(out)
+    return s[:1].upper() + s[1:] if s else s
+
+
 def instalacao_nao_iniciada(dados):
     sup, bv = dados["supply"], dados["bv"]
     agendado = (sup.get("agendado") or 0) == 1
@@ -329,13 +355,14 @@ def linha_gap(texto, col, base_url):
 # Mensagens
 # ----------------------------------------------------------------------------
 def msg_kickoff(nome, empresa, analista, link=None, incluir_instalacao=False):
-    saud = f"Oi, {nome}, tudo bem?" if nome else "Oi, tudo bem?"
+    saud = f"Oi, {nome}! Tudo bem?" if nome else "Olá! Tudo bem?"
     alvo = f"a {empresa}" if empresa else "a sua operação"
     abertura = (
         f"{saud}\n\n"
-        f"Sou o {analista}, da Cobli, e vou ser seu ponto de contato de treinamento "
-        f"pelos próximos 3 meses. Minha missão é simples: deixar {alvo} rodando redonda "
-        f"na plataforma e garantir que vocês sintam o valor logo nas primeiras semanas."
+        f"Meu nome é {analista} e eu sou o analista de onboarding da Cobli que vai acompanhar {alvo} "
+        f"nos próximos 3 meses. Na prática, sou eu quem vai estar do seu lado nessa fase inicial: "
+        f"configurar a plataforma junto com sua equipe, tirar dúvidas e destravar qualquer ponto no caminho.\n\n"
+        f"A ideia é simples: fazer vocês sentirem o valor da Cobli o quanto antes, sem complicação."
     )
     passos = []
     if link:
@@ -349,42 +376,52 @@ def msg_kickoff(nome, empresa, analista, link=None, incluir_instalacao=False):
         )
     corpo = ""
     if len(passos) > 1:
-        corpo = "Para começar com o pé direito, dois passos rápidos:\n\n" + "\n\n".join(
+        corpo = "Para a gente começar com o pé direito, dois passos rápidos:\n\n" + "\n\n".join(
             f"{i + 1}️⃣ {p}" for i, p in enumerate(passos))
     elif len(passos) == 1:
-        corpo = "Para começar, um passo rápido:\n\n" + passos[0]
+        corpo = "Para a gente começar, um passo rápido:\n\n" + passos[0]
     fecho = ("Feito isso, o restante fica comigo e eu te mantenho por dentro de cada etapa. "
-             "Qualquer dúvida no caminho, é só me chamar por aqui. 😊")
+             "Pode me chamar por aqui sempre que precisar, combinado? 😊")
     partes = [abertura] + ([corpo] if corpo else []) + [fecho]
     return "\n\n".join(partes)
 
 
+def _saud(nome):
+    return f"Oi, {nome}! Tudo bem?" if nome else "Oi! Tudo bem?"
+
+
+def _pergunta_final(nome):
+    return f"Me diz o melhor horário, {nome}?" if nome else "Me diz o melhor horário?"
+
+
 def msg_gaps(nome, empresa, gaps, score, base_url):
-    saud = f"Oi, {nome}, tudo bem?" if nome else "Oi, tudo bem?"
+    saud = _saud(nome)
+    conta = f"da {empresa}" if empresa else "de vocês"
+    frota = f"a {empresa}" if empresa else "a sua frota"
     if not gaps:
         s = _to_float(score)
-        nota = f" e o Basic Value em {s:.1f}".replace(".", ",") if s is not None else ""
-        return (f"{saud}\n\nPassando para comemorar: {('a ' + empresa) if empresa else 'a sua frota'} "
-                f"já está com a configuração completa{nota}. É exatamente o patamar que a gente busca no "
-                f"onboarding. Sigo por aqui para o que precisar. 🎉")
+        nota = (f" e o Basic Value em {s:.1f}".replace(".", ",")) if s is not None else ""
+        return (f"{saud}\n\nPassando para comemorar: {frota} já está com a configuração completa{nota}. "
+                f"É exatamente o patamar que a gente busca no onboarding. Sigo por aqui para o que precisar. 🎉")
     itens = "\n".join(linha_gap(t, c, base_url) for c, t in gaps)
-    return (f"{saud}\n\nDei uma olhada na conta de vocês e separei o que ainda falta para a frota atingir "
+    return (f"{saud}\n\nDei uma olhada na conta {conta} e separei o que ainda falta para a frota atingir "
             f"a configuração ideal da Cobli. Deixei o vídeo do passo a passo em cada item:\n\n{itens}\n\n"
             f"Consigo te acompanhar em cada um, com calma. Quer que a gente resolva os primeiros ainda essa "
-            f"semana? Me diz o melhor horário.")
+            f"semana? {_pergunta_final(nome)}")
 
 
 def msg_fase(i, nome, empresa, bv, base_url):
-    saud = f"Oi, {nome}, tudo bem?" if nome else "Oi, tudo bem?"
-    emp = empresa or "a sua frota"
+    saud = _saud(nome)
+    a_emp = f"a {empresa}" if empresa else "a sua frota"
+    de_emp = f"da {empresa}" if empresa else "da sua frota"
     intro = [
-        f"Boas-vindas à Cobli! Nas próximas semanas vou te acompanhar para deixar {emp} rodando redonda. "
-        f"O primeiro passo é a instalação dos equipamentos e o seu acesso ao painel.",
-        f"Com os equipamentos instalados, bora deixar a plataforma com a cara da sua operação. "
+        f"Boas-vindas à Cobli! Nas próximas semanas vou acompanhar {a_emp} de perto para deixar tudo rodando "
+        f"redondo. O primeiro passo é a instalação dos equipamentos e o seu acesso ao painel.",
+        f"Com os equipamentos {de_emp} instalados, bora deixar a plataforma com a cara da sua operação. "
         f"Nesta etapa a gente organiza usuários, grupos e motoristas.",
-        f"Agora vem a parte que mais gera resultado no dia a dia: limite de velocidade, políticas de frota, "
-        f"locais de interesse e checklists.",
-        f"Estamos fechando seus primeiros 90 dias na Cobli. Bora revisar juntos os últimos ajustes para "
+        f"Agora vem a parte que mais gera resultado no dia a dia {de_emp}: limite de velocidade, políticas de "
+        f"frota, locais de interesse e checklists.",
+        f"Estamos fechando os primeiros 90 dias {de_emp} na Cobli. Bora revisar juntos os últimos ajustes para "
         f"garantir a configuração completa.",
     ][i]
 
@@ -392,18 +429,23 @@ def msg_fase(i, nome, empresa, bv, base_url):
         s = _to_float(bv.get("basic_value_score"))
         pend = gaps_abertos(bv)
         if s is not None and s >= META_BASIC_VALUE:
-            return (f"{saud}\n\n{intro}\n\nSua frota já está em {s:.1f} de Basic Value".replace(".", ",", 1)
-                    + ", acima da meta de 3. Parabéns pelo trabalho! Sigo à disposição para o que vier. 🎉")
-        alvo = f"em {s:.1f} de Basic Value".replace(".", ",") if s is not None else "quase lá"
+            nfmt = f"{s:.1f}".replace(".", ",")
+            parabens = f"Parabéns pelo trabalho, {nome}!" if nome else "Parabéns pelo trabalho!"
+            return (f"{saud}\n\n{intro}\n\nBoa notícia: {a_emp} já está em {nfmt} de Basic Value, acima da meta "
+                    f"de 3. {parabens} Sigo à disposição para o que vier. 🎉")
+        alvo = (f"em {s:.1f} de Basic Value".replace(".", ",")) if s is not None else "quase lá"
         itens = "\n".join(linha_gap(t, c, base_url) for c, t in pend)
-        return (f"{saud}\n\n{intro}\n\nSua frota está {alvo} e a meta é chegar a 3. Faltam poucos ajustes:\n\n"
-                f"{itens}\n\nBora fechar esses itens juntos antes de encerrar o onboarding?")
+        return (f"{saud}\n\n{intro}\n\n{a_emp[0].upper() + a_emp[1:]} está {alvo} e a meta é chegar a 3. "
+                f"Faltam poucos ajustes:\n\n{itens}\n\nBora fechar esses itens juntos antes de encerrar o onboarding?")
 
     pend = pendentes_da_fase(i, bv)
     if not pend:
         return f"{saud}\n\n{intro}\n\nPor aqui está tudo certo nesta fase. Seguimos para a próxima etapa. 😊"
     itens = "\n".join(linha_gap(t, c, base_url) for c, t in pend)
     return (f"{saud}\n\n{intro}\n\nPara avançar nesta fase, faltam estes passos (deixei o vídeo de cada um):\n\n"
+            f"{itens}\n\nConsigo te guiar item a item. Qual o melhor horário para a gente ver isso, {nome}?"
+            if nome else
+            f"{saud}\n\n{intro}\n\nPara avançar nesta fase, faltam estes passos (deixei o vídeo de cada um):\n\n"
             f"{itens}\n\nConsigo te guiar item a item. Qual o melhor horário para a gente ver isso?")
 
 
@@ -496,7 +538,7 @@ except Exception as e:
     st.stop()
 
 bv, sup = dados["bv"], dados["supply"]
-empresa = (bv.get("company_name") or sup.get("company_name") or "").strip()
+empresa = format_empresa(bv.get("company_name") or sup.get("company_name") or "")
 nome_final = nome_cliente.strip() or (sup.get("cliente_nome") or "").strip()
 analista_final = analista.strip() or ANALISTA_PADRAO
 telefone_final = telefone.strip() or (sup.get("cliente_telefone") or "")
@@ -563,7 +605,8 @@ with tab_msg:
     if fez_kickoff == "Ainda não":
         st.markdown("### Mensagem de kickoff")
         link = None
-        if not usuario_ativo:
+        sem_acesso = not usuario_ativo
+        if sem_acesso:
             st.warning("Este cliente ainda **não tem usuário com acesso** ao painel. Cole o link de convite para incluí-lo na mensagem.")
             link = (st.text_input("Link de acesso do cliente", placeholder="https://cadastro.cobli.co/invites/XXXXXXXX").strip() or None)
         else:
@@ -571,6 +614,10 @@ with tab_msg:
         msg = msg_kickoff(nome_final, empresa, analista_final, link=link, incluir_instalacao=instalacao_nao_iniciada(dados))
         st.text_area("kickoff_msg", msg, height=max(340, len(msg) // 2), label_visibility="collapsed")
         botao_whatsapp(msg, telefone_final, "wa_kick")
+        if sem_acesso:
+            st.divider()
+            st.caption("Como o cliente ainda não tem acesso, envie também os tutoriais de primeiros passos:")
+            mostrar_videos(["setup_user_bom", "setup_drivers_bom"], base_url, prefix="kickoff")
     else:
         st.markdown("### Próximos passos (features que faltam)")
         if not bv:
