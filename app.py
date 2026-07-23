@@ -51,6 +51,8 @@ SYSTEM_TOM_COBLI = (
     "- NUNCA invente dados, números, datas, nomes ou links. Use somente os fatos fornecidos. "
     "Se um dado não estiver nos fatos, não cite.\n"
     "- Mantenha exatamente os links e números que aparecem no rascunho.\n"
+    "- Você pode incluir links do manual da Cobli (manual.cobli.co) SOMENTE se eles vierem nos fatos. "
+    "Nunca invente ou adivinhe URLs do manual.\n"
     "- PROIBIDO usar travessão (—). Use ponto final ou vírgula.\n"
     "- PROIBIDO a expressão 'tempo real'.\n"
     "- Evite palavras em inglês quando houver equivalente em português (painel, não dashboard).\n"
@@ -101,6 +103,19 @@ VIDEO_MAP = {
 }
 # Vídeo base da fase de instalação (não é critério do BV, mas é pré-requisito)
 VIDEO_VEICULOS = ("veiculos.mp4", "Cadastro de veículos")
+
+# Artigos reais do manual da Cobli (manual.cobli.co) por critério.
+# Usados como referência para a IA (ela só pode citar links que vierem daqui).
+MANUAL_LINKS = {
+    "setup_grups_bom": "https://manual.cobli.co/docs/painel/grupos-de-veiculos",
+    "setup_drivers_bom": "https://manual.cobli.co/docs/painel/motoristas",
+    "setup_driver_identification_bom": "https://manual.cobli.co/docs/painel/associacao-de-trechos/associar-motorista-a-trechos",
+    "basic_config_speed_limit_bom": "https://manual.cobli.co/docs/painel/veiculos/limite-de-velocidade",
+    "basic_config_fleet_policy_bom": "https://manual.cobli.co/docs/painel/alertas/criar-regra",
+    "basic_config_geofences_bom": "https://manual.cobli.co/docs/painel/geofences",
+    "basic_config_checklists_bom": "https://manual.cobli.co/docs/painel/checklists/criar-checklist",
+    "instalation_completeness_grade_bom": "https://manual.cobli.co/docs/painel/comece-aqui/checklist-de-ativacao",
+}
 
 CRITERIOS = {
     "Instalação": [("Mais de 90% das instalações concluídas", "instalation_completeness_grade_bom", "INSTALL_COMPLETENESS", "%")],
@@ -517,20 +532,28 @@ def fatos_cliente(empresa, nome, bv, dias, idx, gaps, usuario_ativo, instal_nao_
     f["Tem usuário com acesso ao painel"] = "sim" if usuario_ativo else "não"
     f["Instalação já iniciada"] = "não" if instal_nao_iniciada else "sim"
     f["Pendências (o que falta)"] = "; ".join(t for _, t in gaps) if gaps else "nenhuma"
+    links = [f"{t}: {MANUAL_LINKS[c]}" for c, t in gaps if c in MANUAL_LINKS]
+    if links:
+        f["Artigos do manual (use SOMENTE estes links, nunca invente outros)"] = " | ".join(links)
     return f
 
 
-def gerar_mensagem_ia(model, fatos, base, objetivo, tom):
+def gerar_mensagem_ia(model, fatos, base, objetivo, tom, curto=True):
     client = _openai_client()
     if client is None:
         return None
     fatos_txt = "\n".join(f"- {k}: {v}" for k, v in fatos.items())
+    regra_curto = (
+        "\n\nIMPORTANTE: escreva uma mensagem CURTA e escaneável para WhatsApp: vá direto ao ponto, "
+        "poucas linhas, sem parágrafos longos. Mantenha os links e os itens da lista."
+    ) if curto else ""
     user = (
         f"Objetivo da mensagem: {objetivo}\n"
         f"Tom desejado: {tom}\n\n"
         f"FATOS REAIS (use somente estes; não invente nada além disto):\n{fatos_txt}\n\n"
         f"RASCUNHO BASE (melhore a clareza, a interpretação e a personalização, "
-        f"mas mantenha todos os fatos, números e links exatamente como estão):\n{base}\n\n"
+        f"mas mantenha todos os fatos, números e links exatamente como estão):\n{base}"
+        f"{regra_curto}\n\n"
         f"Escreva a versão final da mensagem de WhatsApp."
     )
     resp = client.chat.completions.create(
@@ -591,6 +614,36 @@ def bloco_ia(base_msg, fatos, objetivo, telefone, key, model, tom):
         botao_whatsapp(saida, telefone, f"waia_{key}")
 
 
+def bloco_ia_auto(base_msg, fatos, objetivo, telefone, key, model, tom):
+    """Gera a mensagem por IA automaticamente (modo IA), com cache por cliente."""
+    ss_key = f"iaauto_{key}_{model}"
+    regen = st.button("🔄 Regenerar com IA", key=f"re_{key}")
+    if regen or ss_key not in st.session_state:
+        with st.spinner("Gerando com IA no tom da Cobli..."):
+            try:
+                st.session_state[ss_key] = gerar_mensagem_ia(model, fatos, base_msg, objetivo, tom, curto=True)
+            except Exception as e:
+                st.session_state[ss_key] = f"[Falha ao gerar com IA: {e}]\n\n{base_msg}"
+    saida = st.session_state.get(ss_key) or base_msg
+    st.caption(f"Gerado por IA ({model}) no tom da Cobli. Revise antes de enviar.")
+    st.text_area(f"iaauto_{key}", saida, height=max(260, len(saida) // 2),
+                 key=f"taauto_{key}", label_visibility="collapsed")
+    botao_whatsapp(saida, telefone, f"waauto_{key}")
+
+
+def render_indicacao(base_msg, objetivo, key, fatos, telefone, modo_ia, model, tom):
+    """Mostra a indicação no modo escolhido: IA (auto) ou Padrão (texto pronto + botão IA opcional)."""
+    if modo_ia and ia_disponivel():
+        bloco_ia_auto(base_msg, fatos, objetivo, telefone, key, model, tom)
+    else:
+        if modo_ia and not ia_disponivel():
+            st.info("Modo IA selecionado, mas a chave da OpenAI não está no secrets. Mostrando a versão padrão.")
+        st.text_area(f"ind_{key}", base_msg, height=max(300, len(base_msg) // 2),
+                     key=f"ta_{key}", label_visibility="collapsed")
+        botao_whatsapp(base_msg, telefone, f"wa_{key}")
+        bloco_ia(base_msg, fatos, objetivo, telefone, f"m_{key}", model, tom)
+
+
 def mostrar_videos(cols, base_url, prefix=""):
     """Players + download dos vídeos dos critérios em `cols`.
     `prefix` garante chaves únicas quando a mesma seção se repete em abas diferentes."""
@@ -633,13 +686,18 @@ with st.sidebar:
     base_url = st.text_input("URL base dos vídeos (opcional)", value=VIDEOS_BASE_URL,
                              help="Se hospedar a pasta videos/ (ex.: no GitHub), cole a URL base para os links entrarem nas mensagens.")
     st.divider()
-    st.subheader("IA (opcional)")
+    st.subheader("Indicação")
+    modo = st.radio(
+        "Modo", ["Padrão", "IA (gpt-4o-mini)"],
+        help="Padrão usa os textos prontos. IA gera tudo com o ChatGPT, no tom da Cobli, já analisado.",
+    )
+    modo_ia = modo.startswith("IA")
     if ia_disponivel():
-        modelo_ia = st.selectbox("Modelo", MODELOS_IA, index=0)
+        modelo_ia = st.selectbox("Modelo de IA", MODELOS_IA, index=0)
         tom_ia = st.selectbox("Tom da mensagem", TONS_IA, index=0)
     else:
         modelo_ia, tom_ia = MODELOS_IA[0], TONS_IA[0]
-        st.caption("Para ativar o botão 'Personalizar com IA', informe a chave em [openai] no secrets.")
+        st.caption("Chave da OpenAI ausente em [openai] no secrets. O modo IA cai para o padrão até você configurá-la.")
     buscar = st.button("Analisar cliente", type="primary", use_container_width=True)
 
 if not buscar:
@@ -734,9 +792,8 @@ with tab_msg:
             st.success("Cliente já tem usuário com acesso ao painel. O link de convite não é necessário.")
         msg = msg_kickoff(nome_final, empresa, analista_final, link=link,
                           incluir_instalacao=_nao_iniciada, mencionar_videos=sem_acesso)
-        st.text_area("kickoff_msg", msg, height=max(340, len(msg) // 2), label_visibility="collapsed")
-        botao_whatsapp(msg, telefone_final, "wa_kick")
-        bloco_ia(msg, fatos, "Mensagem de kickoff/boas-vindas do onboarding", telefone_final, "kick", modelo_ia, tom_ia)
+        render_indicacao(msg, "Mensagem de kickoff/boas-vindas do onboarding",
+                         f"{dados['hs_id']}_kick", fatos, telefone_final, modo_ia, modelo_ia, tom_ia)
         if sem_acesso:
             st.divider()
             st.caption("Como o cliente ainda não tem acesso, envie também os tutoriais de primeiros passos:")
@@ -747,9 +804,8 @@ with tab_msg:
             st.info("Sem Basic Value para gerar a lista de pendências.")
         else:
             msg = msg_gaps(nome_final, empresa, gaps, score, base_url)
-            st.text_area("gaps_msg", msg, height=max(300, len(msg) // 2), label_visibility="collapsed")
-            botao_whatsapp(msg, telefone_final, "wa_gaps")
-            bloco_ia(msg, fatos, "Mensagem sobre as features que faltam para o cliente", telefone_final, "gaps", modelo_ia, tom_ia)
+            render_indicacao(msg, "Mensagem sobre as features que faltam para o cliente",
+                             f"{dados['hs_id']}_gaps", fatos, telefone_final, modo_ia, modelo_ia, tom_ia)
             if gaps:
                 st.caption(f"{len(gaps)} feature(s) pendente(s) no Basic Value.")
                 st.divider()
@@ -763,9 +819,7 @@ with tab_fases:
         rot, emoji, _ = status_fase(i, dias, bv)
         with st.expander(f"{f['emoji']} Fase {i + 1}: {f['nome']} · {emoji} {rot}", expanded=(i == idx)):
             texto = msg_fase(i, nome_final, empresa, bv, base_url)
-            st.text_area(f"fase_{i}", texto, height=max(220, len(texto) // 2), label_visibility="collapsed")
-            botao_whatsapp(texto, telefone_final, f"wa_fase_{i}")
-            bloco_ia(texto, fatos, f"Comunicação da fase {i + 1} ({FASES[i]['nome']}) da jornada de onboarding",
-                     telefone_final, f"fase{i}", modelo_ia, tom_ia)
+            render_indicacao(texto, f"Comunicação da fase {i + 1} ({FASES[i]['nome']}) da jornada de onboarding",
+                             f"{dados['hs_id']}_fase{i}", fatos, telefone_final, modo_ia, modelo_ia, tom_ia)
             pend_cols = [c for c, _ in (gaps_abertos(bv) if i == 3 else pendentes_da_fase(i, bv))]
             mostrar_videos(pend_cols, base_url, prefix=f"fase{i}")
