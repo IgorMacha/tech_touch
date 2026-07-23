@@ -357,41 +357,43 @@ def linha_gap(texto, col, base_url):
 def msg_kickoff(nome, empresa, analista, link=None, incluir_instalacao=False, mencionar_videos=False):
     saud = f"Oi, {nome}! Tudo bem?" if nome else "Olá! Tudo bem?"
     alvo = f"a {empresa}" if empresa else "a sua operação"
+    de_emp = f"da {empresa}" if empresa else "da sua frota"
     abertura = (
         f"{saud}\n\n"
         f"Meu nome é {analista} e eu sou o analista de onboarding da Cobli que vai acompanhar {alvo} "
         f"nos próximos 3 meses. Na prática, sou eu quem vai estar do seu lado nessa fase inicial: "
-        f"configurar a plataforma junto com sua equipe, tirar dúvidas e destravar qualquer ponto no caminho.\n\n"
-        f"A ideia é simples: fazer vocês sentirem o valor da Cobli o quanto antes, sem complicação."
+        f"organizar a instalação, configurar a plataforma junto com a sua equipe e destravar qualquer "
+        f"ponto no caminho para vocês sentirem o valor da Cobli o quanto antes."
     )
-    passos = []
-    if link:
-        passos.append(f"*Seu acesso ao painel*\nÉ só concluir o cadastro por aqui: {link}")
+
+    blocos = []
     if incluir_instalacao:
-        passos.append(
-            "*Agendamento da instalação*\n"
-            "Me manda estas informações que eu já organizo tudo com o time técnico:\n"
-            "• 2 opções de data e horário\n• Endereço completo da instalação\n"
-            "• Nome e telefone do responsável no local\n• Placas dos veículos"
+        blocos.append(
+            f"Nosso primeiro passo é instalar os equipamentos nos veículos {de_emp}, que é o que liga a "
+            f"telemetria e faz tudo começar a funcionar. Para eu já adiantar o agendamento com o time "
+            f"técnico, me envie por aqui, por favor:\n"
+            f"• 2 opções de data e horário\n"
+            f"• Endereço completo da instalação\n"
+            f"• Nome e telefone do responsável no local\n"
+            f"• Placas dos veículos"
         )
-    corpo = ""
-    if len(passos) > 1:
-        corpo = "Para a gente começar com o pé direito, dois passos rápidos:\n\n" + "\n\n".join(
-            f"{i + 1}️⃣ {p}" for i, p in enumerate(passos))
-    elif len(passos) == 1:
-        corpo = "Para a gente começar, um passo rápido:\n\n" + passos[0]
-    videos_line = ""
+    if link:
+        if incluir_instalacao:
+            blocos.append(f"Aproveitando, já liberei o seu acesso ao painel. É só concluir o cadastro por aqui "
+                          f"e ir se ambientando: {link}")
+        else:
+            blocos.append(f"Para você já começar a acessar o painel, é só concluir o seu cadastro por aqui: {link}")
     if mencionar_videos:
-        videos_line = (
-            "Estou te enviando também dois vídeos rápidos de primeiros passos:\n"
+        blocos.append(
+            "Vou te enviar também dois vídeos rápidos de primeiros passos:\n"
             "• Como criar os usuários da sua equipe\n"
             "• Como cadastrar os motoristas\n\n"
-            "Assim que o acesso estiver ativo, é só seguir o passo a passo que a plataforma já começa a "
-            "fazer sentido no dia a dia."
+            "Assim que o acesso estiver ativo, é só seguir o passo a passo."
         )
-    fecho = ("Feito isso, o restante fica comigo e eu te mantenho por dentro de cada etapa. "
-             "Pode me chamar por aqui sempre que precisar, combinado? 😊")
-    partes = [abertura] + ([corpo] if corpo else []) + ([videos_line] if videos_line else []) + [fecho]
+
+    fecho = ("Fico à disposição para acompanhar tudo de perto e garantir que essa fase inicial aconteça da "
+             "melhor forma. Pode me chamar por aqui sempre que precisar, combinado? 😊")
+    partes = [abertura] + blocos + [fecho]
     return "\n\n".join(partes)
 
 
