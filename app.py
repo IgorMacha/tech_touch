@@ -38,6 +38,28 @@ VIDEOS_DIR = _detectar_videos_dir()
 # Pode também ser sobrescrito no campo da barra lateral.
 VIDEOS_BASE_URL = ""
 
+# IA (opcional)
+MODELOS_IA = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
+TONS_IA = ["Próximo e caloroso", "Objetivo e direto", "Formal e institucional"]
+
+SYSTEM_TOM_COBLI = (
+    "Você é redator de Customer Success da Cobli, empresa brasileira de telemetria e gestão de frotas. "
+    "Escreve mensagens de WhatsApp que um analista de onboarding envia ao cliente.\n\n"
+    "TOM: especialista acessível, parceiro da rotina, objetivo e humano. Próximo sem perder profissionalismo. "
+    "Sem marketing vazio, sem dramatização, sem culpar o cliente.\n\n"
+    "REGRAS INEGOCIÁVEIS:\n"
+    "- NUNCA invente dados, números, datas, nomes ou links. Use somente os fatos fornecidos. "
+    "Se um dado não estiver nos fatos, não cite.\n"
+    "- Mantenha exatamente os links e números que aparecem no rascunho.\n"
+    "- PROIBIDO usar travessão (—). Use ponto final ou vírgula.\n"
+    "- PROIBIDO a expressão 'tempo real'.\n"
+    "- Evite palavras em inglês quando houver equivalente em português (painel, não dashboard).\n"
+    "- No máximo 3 emojis na mensagem inteira, sem exageros.\n"
+    "- Formato WhatsApp: use *negrito* com asteriscos, quebras de linha e bullets com •.\n"
+    "- Não use estruturas de texto de IA como 'não é X, é Y' nem tripletes de impacto.\n"
+    "Responda apenas com o texto final da mensagem, pronto para enviar."
+)
+
 # Fases da jornada (por dia desde a assinatura do contrato)
 FASES = [
     {"nome": "Boas-vindas & Instalação", "ini": 0, "fim": 15, "emoji": "📦"},
@@ -461,6 +483,65 @@ def msg_fase(i, nome, empresa, bv, base_url):
 
 
 # ----------------------------------------------------------------------------
+# IA (ChatGPT) - opcional
+# ----------------------------------------------------------------------------
+@st.cache_resource
+def _openai_client():
+    try:
+        key = None
+        if "openai" in st.secrets:
+            key = dict(st.secrets["openai"]).get("api_key")
+        key = key or st.secrets.get("OPENAI_API_KEY")
+        if not key:
+            return None
+        from openai import OpenAI
+        return OpenAI(api_key=key)
+    except Exception:
+        return None
+
+
+def ia_disponivel():
+    return _openai_client() is not None
+
+
+def fatos_cliente(empresa, nome, bv, dias, idx, gaps, usuario_ativo, instal_nao_iniciada):
+    """Dicionário de fatos REAIS para a IA usar (e não inventar)."""
+    f = {"Empresa": empresa or "(desconhecida)", "Contato": nome or "(desconhecido)"}
+    s = _to_float(bv.get("basic_value_score"))
+    if s is not None:
+        f["Basic Value atual (0 a 4)"] = f"{s:.2f}".replace(".", ",")
+    f["Meta de Basic Value"] = "3"
+    if dias is not None:
+        f["Dia da jornada (de 90)"] = dias
+    f["Fase atual"] = FASES[idx]["nome"]
+    f["Tem usuário com acesso ao painel"] = "sim" if usuario_ativo else "não"
+    f["Instalação já iniciada"] = "não" if instal_nao_iniciada else "sim"
+    f["Pendências (o que falta)"] = "; ".join(t for _, t in gaps) if gaps else "nenhuma"
+    return f
+
+
+def gerar_mensagem_ia(model, fatos, base, objetivo, tom):
+    client = _openai_client()
+    if client is None:
+        return None
+    fatos_txt = "\n".join(f"- {k}: {v}" for k, v in fatos.items())
+    user = (
+        f"Objetivo da mensagem: {objetivo}\n"
+        f"Tom desejado: {tom}\n\n"
+        f"FATOS REAIS (use somente estes; não invente nada além disto):\n{fatos_txt}\n\n"
+        f"RASCUNHO BASE (melhore a clareza, a interpretação e a personalização, "
+        f"mas mantenha todos os fatos, números e links exatamente como estão):\n{base}\n\n"
+        f"Escreva a versão final da mensagem de WhatsApp."
+    )
+    resp = client.chat.completions.create(
+        model=model, temperature=0.5,
+        messages=[{"role": "system", "content": SYSTEM_TOM_COBLI},
+                  {"role": "user", "content": user}],
+    )
+    return resp.choices[0].message.content.strip()
+
+
+# ----------------------------------------------------------------------------
 # UI helpers
 # ----------------------------------------------------------------------------
 def render_timeline(dias, bv):
@@ -489,6 +570,25 @@ def botao_whatsapp(texto, telefone, key):
         st.link_button("📲 Enviar no WhatsApp", url, use_container_width=True)
     else:
         st.caption("Informe o telefone do cliente na barra lateral para gerar o link de envio.")
+
+
+def bloco_ia(base_msg, fatos, objetivo, telefone, key, model, tom):
+    """Botão que reescreve a mensagem com IA (tom Cobli, sem inventar dados)."""
+    if not ia_disponivel():
+        return
+    ss_key = f"ia_{key}"
+    if st.button("✨ Personalizar com IA", key=f"btn_{key}"):
+        with st.spinner("Gerando com IA no tom da Cobli..."):
+            try:
+                st.session_state[ss_key] = gerar_mensagem_ia(model, fatos, base_msg, objetivo, tom)
+            except Exception as e:
+                st.session_state[ss_key] = None
+                st.error(f"Falha ao gerar com IA: {e}")
+    saida = st.session_state.get(ss_key)
+    if saida:
+        st.markdown("**Versão personalizada pela IA** (revise antes de enviar)")
+        st.text_area("ia_out", saida, height=max(260, len(saida) // 2), key=f"ta_{key}", label_visibility="collapsed")
+        botao_whatsapp(saida, telefone, f"waia_{key}")
 
 
 def mostrar_videos(cols, base_url, prefix=""):
@@ -532,6 +632,14 @@ with st.sidebar:
     fez_kickoff = st.radio("Já fez o kickoff via mensagem?", ["Ainda não", "Sim, já fiz"])
     base_url = st.text_input("URL base dos vídeos (opcional)", value=VIDEOS_BASE_URL,
                              help="Se hospedar a pasta videos/ (ex.: no GitHub), cole a URL base para os links entrarem nas mensagens.")
+    st.divider()
+    st.subheader("IA (opcional)")
+    if ia_disponivel():
+        modelo_ia = st.selectbox("Modelo", MODELOS_IA, index=0)
+        tom_ia = st.selectbox("Tom da mensagem", TONS_IA, index=0)
+    else:
+        modelo_ia, tom_ia = MODELOS_IA[0], TONS_IA[0]
+        st.caption("Para ativar o botão 'Personalizar com IA', informe a chave em [openai] no secrets.")
     buscar = st.button("Analisar cliente", type="primary", use_container_width=True)
 
 if not buscar:
@@ -563,6 +671,8 @@ idx = fase_atual(dias)
 label, cor = classificar_nota(score)
 gaps = gaps_abertos(bv) if bv else []
 usuario_ativo = tem_usuario_ativo(bv)
+_nao_iniciada = instalacao_nao_iniciada(dados)
+fatos = fatos_cliente(empresa, nome_final, bv, dias, idx, gaps, usuario_ativo, _nao_iniciada)
 
 # ---- Cabeçalho ----
 st.subheader(empresa or f"Empresa {dados['hs_id']}")
@@ -623,9 +733,10 @@ with tab_msg:
         else:
             st.success("Cliente já tem usuário com acesso ao painel. O link de convite não é necessário.")
         msg = msg_kickoff(nome_final, empresa, analista_final, link=link,
-                          incluir_instalacao=instalacao_nao_iniciada(dados), mencionar_videos=sem_acesso)
+                          incluir_instalacao=_nao_iniciada, mencionar_videos=sem_acesso)
         st.text_area("kickoff_msg", msg, height=max(340, len(msg) // 2), label_visibility="collapsed")
         botao_whatsapp(msg, telefone_final, "wa_kick")
+        bloco_ia(msg, fatos, "Mensagem de kickoff/boas-vindas do onboarding", telefone_final, "kick", modelo_ia, tom_ia)
         if sem_acesso:
             st.divider()
             st.caption("Como o cliente ainda não tem acesso, envie também os tutoriais de primeiros passos:")
@@ -638,6 +749,7 @@ with tab_msg:
             msg = msg_gaps(nome_final, empresa, gaps, score, base_url)
             st.text_area("gaps_msg", msg, height=max(300, len(msg) // 2), label_visibility="collapsed")
             botao_whatsapp(msg, telefone_final, "wa_gaps")
+            bloco_ia(msg, fatos, "Mensagem sobre as features que faltam para o cliente", telefone_final, "gaps", modelo_ia, tom_ia)
             if gaps:
                 st.caption(f"{len(gaps)} feature(s) pendente(s) no Basic Value.")
                 st.divider()
@@ -653,5 +765,7 @@ with tab_fases:
             texto = msg_fase(i, nome_final, empresa, bv, base_url)
             st.text_area(f"fase_{i}", texto, height=max(220, len(texto) // 2), label_visibility="collapsed")
             botao_whatsapp(texto, telefone_final, f"wa_fase_{i}")
+            bloco_ia(texto, fatos, f"Comunicação da fase {i + 1} ({FASES[i]['nome']}) da jornada de onboarding",
+                     telefone_final, f"fase{i}", modelo_ia, tom_ia)
             pend_cols = [c for c, _ in (gaps_abertos(bv) if i == 3 else pendentes_da_fase(i, bv))]
             mostrar_videos(pend_cols, base_url, prefix=f"fase{i}")
