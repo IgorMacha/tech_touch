@@ -354,7 +354,7 @@ def linha_gap(texto, col, base_url):
 # ----------------------------------------------------------------------------
 # Mensagens
 # ----------------------------------------------------------------------------
-def msg_kickoff(nome, empresa, analista, link=None, incluir_instalacao=False):
+def msg_kickoff(nome, empresa, analista, link=None, incluir_instalacao=False, mencionar_videos=False):
     saud = f"Oi, {nome}! Tudo bem?" if nome else "Olá! Tudo bem?"
     alvo = f"a {empresa}" if empresa else "a sua operação"
     abertura = (
@@ -380,9 +380,18 @@ def msg_kickoff(nome, empresa, analista, link=None, incluir_instalacao=False):
             f"{i + 1}️⃣ {p}" for i, p in enumerate(passos))
     elif len(passos) == 1:
         corpo = "Para a gente começar, um passo rápido:\n\n" + passos[0]
+    videos_line = ""
+    if mencionar_videos:
+        videos_line = (
+            "Estou te enviando também dois vídeos rápidos de primeiros passos:\n"
+            "• Como criar os usuários da sua equipe\n"
+            "• Como cadastrar os motoristas\n\n"
+            "Assim que o acesso estiver ativo, é só seguir o passo a passo que a plataforma já começa a "
+            "fazer sentido no dia a dia."
+        )
     fecho = ("Feito isso, o restante fica comigo e eu te mantenho por dentro de cada etapa. "
              "Pode me chamar por aqui sempre que precisar, combinado? 😊")
-    partes = [abertura] + ([corpo] if corpo else []) + [fecho]
+    partes = [abertura] + ([corpo] if corpo else []) + ([videos_line] if videos_line else []) + [fecho]
     return "\n\n".join(partes)
 
 
@@ -611,7 +620,8 @@ with tab_msg:
             link = (st.text_input("Link de acesso do cliente", placeholder="https://cadastro.cobli.co/invites/XXXXXXXX").strip() or None)
         else:
             st.success("Cliente já tem usuário com acesso ao painel. O link de convite não é necessário.")
-        msg = msg_kickoff(nome_final, empresa, analista_final, link=link, incluir_instalacao=instalacao_nao_iniciada(dados))
+        msg = msg_kickoff(nome_final, empresa, analista_final, link=link,
+                          incluir_instalacao=instalacao_nao_iniciada(dados), mencionar_videos=sem_acesso)
         st.text_area("kickoff_msg", msg, height=max(340, len(msg) // 2), label_visibility="collapsed")
         botao_whatsapp(msg, telefone_final, "wa_kick")
         if sem_acesso:
