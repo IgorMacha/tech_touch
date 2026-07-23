@@ -50,9 +50,13 @@ SYSTEM_TOM_COBLI = (
     "REGRAS INEGOCIÁVEIS:\n"
     "- NUNCA invente dados, números, datas, nomes ou links. Use somente os fatos fornecidos. "
     "Se um dado não estiver nos fatos, não cite.\n"
-    "- Mantenha exatamente os links e números que aparecem no rascunho.\n"
-    "- Você pode incluir links do manual da Cobli (manual.cobli.co) SOMENTE se eles vierem nos fatos. "
-    "Nunca invente ou adivinhe URLs do manual.\n"
+    "- Mantenha exatamente os números que aparecem no rascunho.\n"
+    "- NÃO inclua links nem URLs no texto (nem do manual, nem de vídeo). NUNCA use markdown de link "
+    "no formato [texto](url); o WhatsApp não renderiza e fica feio. Use a 'Referência do manual' apenas "
+    "como conteúdo para escrever a orientação, sem colar endereços.\n"
+    "- Os vídeos vão anexados à parte. Se fizer sentido, diga em uma frase que vai enviar o vídeo do passo, "
+    "sem colocar link.\n"
+    "- Fale apenas dos itens que estão como pendentes nos fatos. Não mencione o que já está concluído.\n"
     "- PROIBIDO usar travessão (—). Use ponto final ou vírgula.\n"
     "- PROIBIDO a expressão 'tempo real'.\n"
     "- Evite palavras em inglês quando houver equivalente em português (painel, não dashboard).\n"
@@ -104,17 +108,18 @@ VIDEO_MAP = {
 # Vídeo base da fase de instalação (não é critério do BV, mas é pré-requisito)
 VIDEO_VEICULOS = ("veiculos.mp4", "Cadastro de veículos")
 
-# Artigos reais do manual da Cobli (manual.cobli.co) por critério.
-# Usados como referência para a IA (ela só pode citar links que vierem daqui).
-MANUAL_LINKS = {
-    "setup_grups_bom": "https://manual.cobli.co/docs/painel/grupos-de-veiculos",
-    "setup_drivers_bom": "https://manual.cobli.co/docs/painel/motoristas",
-    "setup_driver_identification_bom": "https://manual.cobli.co/docs/painel/associacao-de-trechos/associar-motorista-a-trechos",
-    "basic_config_speed_limit_bom": "https://manual.cobli.co/docs/painel/veiculos/limite-de-velocidade",
-    "basic_config_fleet_policy_bom": "https://manual.cobli.co/docs/painel/alertas/criar-regra",
-    "basic_config_geofences_bom": "https://manual.cobli.co/docs/painel/geofences",
-    "basic_config_checklists_bom": "https://manual.cobli.co/docs/painel/checklists/criar-checklist",
-    "instalation_completeness_grade_bom": "https://manual.cobli.co/docs/painel/comece-aqui/checklist-de-ativacao",
+# Resumo de conteúdo do manual da Cobli (manual.cobli.co) por critério.
+# Serve de REFERÊNCIA para a IA escrever a orientação. NÃO é para colar link no texto.
+MANUAL_REF = {
+    "setup_user_bom": "Usuários: perfis de acesso ao painel para a equipe, cada um com e-mail e permissões.",
+    "setup_grups_bom": "Grupos de veículos: organizam a frota por filial, operação, região ou cliente e deixam filtros, alertas e relatórios mais simples.",
+    "setup_drivers_bom": "Motoristas: cadastro de condutores (nome, CPF, CNH, identificador) para saber quem dirigiu cada jornada e ranquear a segurança.",
+    "setup_driver_identification_bom": "Identificação do motorista: indicar quem dirigiu cada trecho/jornada, o que melhora os relatórios por condutor.",
+    "basic_config_speed_limit_bom": "Limite de velocidade: definido por veículo, gera alertas e relatórios de excesso.",
+    "basic_config_fleet_policy_bom": "Regras de alerta (política de frota): avisos automáticos para velocidade, entrada/saída de locais, fadiga, motor ocioso, entre outros.",
+    "basic_config_geofences_bom": "Locais de interesse (geofences): áreas no mapa (garagem, cliente, filial) que registram entradas e saídas e podem disparar alertas.",
+    "basic_config_checklists_bom": "Checklists: formulários digitais que o motorista preenche no app para inspeção ou vistoria, com as respostas chegando no painel.",
+    "instalation_completeness_grade_bom": "Instalação: equipamentos nos veículos que ligam a telemetria e são a base para todo o resto.",
 }
 
 CRITERIOS = {
@@ -532,9 +537,9 @@ def fatos_cliente(empresa, nome, bv, dias, idx, gaps, usuario_ativo, instal_nao_
     f["Tem usuário com acesso ao painel"] = "sim" if usuario_ativo else "não"
     f["Instalação já iniciada"] = "não" if instal_nao_iniciada else "sim"
     f["Pendências (o que falta)"] = "; ".join(t for _, t in gaps) if gaps else "nenhuma"
-    links = [f"{t}: {MANUAL_LINKS[c]}" for c, t in gaps if c in MANUAL_LINKS]
-    if links:
-        f["Artigos do manual (use SOMENTE estes links, nunca invente outros)"] = " | ".join(links)
+    refs = [MANUAL_REF[c] for c, _ in gaps if c in MANUAL_REF]
+    if refs:
+        f["Referência do manual (conteúdo para orientar; NÃO colar como link)"] = " | ".join(refs)
     return f
 
 
