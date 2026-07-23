@@ -1,9 +1,9 @@
 """
-Cobli - Onboarding Tech Touch | Assistente de Kickoff
-=====================================================
-Recebe um Deal ID do HubSpot, analisa o Basic Value da frota no Databricks,
-checa/gera o link de acesso ao painel (severino) e monta as mensagens de
-WhatsApp de kickoff prontas para copiar.
+Cobli - Onboarding Tech Touch | Jornada de 90 dias
+===================================================
+Recebe um Deal ID do HubSpot, posiciona o cliente na jornada de 90 dias
+(meta: Basic Value >= 3), mostra o que ele já fez, e monta as comunicações
+de WhatsApp de cada fase.
 
 Como rodar:
     pip install -r requirements.txt
@@ -12,22 +12,28 @@ Como rodar:
 Credenciais: preencher .streamlit/secrets.toml (ver README).
 """
 
-import re
 import pandas as pd
 import streamlit as st
 
-# ----------------------------------------------------------------------------
-# Config
-# ----------------------------------------------------------------------------
-st.set_page_config(page_title="Cobli · Kickoff Onboarding", page_icon="🚚", layout="wide")
+st.set_page_config(page_title="Cobli · Jornada de Onboarding", page_icon="🚚", layout="wide")
 
 ANALISTA_PADRAO = "Igor"
 INVITE_BASE_URL = "https://cadastro.cobli.co/invites/{}"
+META_BASIC_VALUE = 3.0
+JORNADA_DIAS = 90
 
-# Regras do Basic Value (thresholds por critério)
+# Fases da jornada (por dia desde a assinatura do contrato)
+FASES = [
+    {"nome": "Boas-vindas & Instalação", "ini": 0, "fim": 15, "emoji": "📦"},
+    {"nome": "Configuração inicial (Setup)", "ini": 16, "fim": 45, "emoji": "⚙️"},
+    {"nome": "Segurança & gestão", "ini": 46, "fim": 75, "emoji": "🛡️"},
+    {"nome": "Consolidação & valor", "ini": 76, "fim": 90, "emoji": "🎯"},
+]
+
+# Critérios do Basic Value: (label, coluna booleana _bom, coluna do valor bruto, unidade)
 CRITERIOS = {
     "Instalação": [
-        ("Mais de 90% das instalações concluídas", "pct_instalation_bom", "INSTALL_COMPLETENESS", "%"),
+        ("Mais de 90% das instalações concluídas", "instalation_completeness_grade_bom", "INSTALL_COMPLETENESS", "%"),
     ],
     "Setup": [
         ("Pelo menos 2 Perfis de Usuário", "setup_user_bom", "raw_num_profiles", "un"),
@@ -43,6 +49,19 @@ CRITERIOS = {
     ],
 }
 
+# Gaps na ordem da jornada: (coluna _bom, texto de ação para o cliente)
+GAPS = [
+    ("instalation_completeness_grade_bom", "Concluir a instalação dos equipamentos (mais de 90% da frota ativa)"),
+    ("setup_user_bom", "Criar pelo menos 2 perfis de usuário para a sua equipe"),
+    ("setup_grups_bom", "Organizar os veículos em pelo menos 2 grupos"),
+    ("setup_drivers_bom", "Cadastrar pelo menos 2 motoristas"),
+    ("setup_driver_identification_bom", "Identificar o motorista em pelo menos 60% das viagens"),
+    ("basic_config_speed_limit_bom", "Configurar o limite de velocidade em pelo menos 60% dos veículos"),
+    ("basic_config_fleet_policy_bom", "Criar pelo menos 2 regras de política de frota"),
+    ("basic_config_geofences_bom", "Criar pelo menos 2 geofences (cercas virtuais)"),
+    ("basic_config_checklists_bom", "Criar pelo menos 2 checklists"),
+]
+
 
 # ----------------------------------------------------------------------------
 # Conexões
@@ -51,8 +70,6 @@ CRITERIOS = {
 def _databricks_conn():
     from databricks import sql
     cfg = st.secrets["databricks"]
-    # Aceita os dois formatos de chave (server_hostname/http_path/access_token
-    # ou DATABRICKS_HOST/DATABRICKS_TOKEN/DATABRICKS_WAREHOUSE_ID).
     host = (cfg.get("server_hostname") or cfg.get("DATABRICKS_HOST") or "")
     host = host.replace("https://", "").replace("http://", "").strip().rstrip("/")
     http_path = cfg.get("http_path")
@@ -60,11 +77,7 @@ def _databricks_conn():
         wid = (cfg.get("DATABRICKS_WAREHOUSE_ID") or "").strip()
         http_path = f"/sql/1.0/warehouses/{wid}"
     token = cfg.get("access_token") or cfg.get("DATABRICKS_TOKEN")
-    return sql.connect(
-        server_hostname=host,
-        http_path=http_path,
-        access_token=token,
-    )
+    return sql.connect(server_hostname=host, http_path=http_path, access_token=token)
 
 
 def run_databricks(query: str) -> pd.DataFrame:
@@ -77,12 +90,13 @@ def run_databricks(query: str) -> pd.DataFrame:
 
 
 def get_invite_link(email: str):
-    """Consulta o severino (Postgres) e retorna (link, row) ou (None, None)."""
+    """Consulta o severino (Postgres) e retorna (link, row) ou (None, None).
+    Só funciona dentro da rede interna da Cobli (VPN/VPC)."""
     import psycopg2
     cfg = st.secrets["severino"]
     conn = psycopg2.connect(
         dbname=cfg["dbname"], user=cfg["user"],
-        password=cfg["password"], host=cfg["host"],
+        password=cfg["password"], host=cfg["host"], connect_timeout=8,
     )
     try:
         df = pd.read_sql(
@@ -98,12 +112,26 @@ def get_invite_link(email: str):
 
 
 # ----------------------------------------------------------------------------
-# Queries Databricks
+# Query
 # ----------------------------------------------------------------------------
+BV_COLS = [
+    "company_id", "company_name", "fleet_id", "csm", "status_da_empresa",
+    "basic_value_score", "INSTALL_COMPLETENESS", "data_de_assinatura_do_contrato",
+    "semana_basic_value", "activation_heavy_users", "raw_num_heavy_users",
+    "instalation_completeness_grade", "setup_grade", "basic_config_grade",
+    "raw_num_profiles", "raw_num_groups", "raw_num_drivers",
+    "raw_proportion_trips", "raw_proportion_speed_limit",
+    "raw_num_fleet_policy", "raw_num_geofences", "raw_num_checklists",
+    "instalation_completeness_grade_bom", "setup_user_bom", "setup_grups_bom",
+    "setup_drivers_bom", "setup_driver_identification_bom",
+    "basic_config_speed_limit_bom", "basic_config_fleet_policy_bom",
+    "basic_config_geofences_bom", "basic_config_checklists_bom",
+]
+
+
 def fetch_deal(deal_id: str) -> dict:
     deal_id = deal_id.strip()
 
-    # 1) Instalação + empresa (âncora no supply_cube)
     sup = run_databricks(f"""
         SELECT
           MAX(company_id)   AS company_id,
@@ -115,7 +143,6 @@ def fetch_deal(deal_id: str) -> dict:
                     OR instalacao__entry_date_aguardando_tecnico_instalar IS NOT NULL
                    THEN 1 ELSE 0 END)                              AS agendado,
           MAX(instalacao__data_dia_marcado)                        AS data_marcada,
-          MAX(instalacao__data_realizada)                          AS data_realizada,
           MAX(CASE WHEN instalacao__entry_date_instalado IS NOT NULL
                     OR instalacao__data_realizada IS NOT NULL
                    THEN 1 ELSE 0 END)                              AS instalado_flag,
@@ -128,8 +155,6 @@ def fetch_deal(deal_id: str) -> dict:
     sup = sup.iloc[0].to_dict() if not sup.empty else {}
 
     company_id = sup.get("company_id")
-
-    # Fallback: mapear deal -> empresa pelos contratos
     if not company_id:
         c = run_databricks(f"""
             SELECT MAX(associated_company_id) AS company_id
@@ -138,23 +163,10 @@ def fetch_deal(deal_id: str) -> dict:
         """)
         company_id = c.iloc[0]["company_id"] if not c.empty else None
 
-    # 2) Basic Value da semana atual
     bv = pd.DataFrame()
     if company_id:
-        cols = ", ".join([
-            "company_id", "company_name", "fleet_id", "csm", "status_da_empresa",
-            "basic_value_score", "INSTALL_COMPLETENESS",
-            "instalation_completeness_grade", "setup_grade", "basic_config_grade",
-            "raw_num_profiles", "raw_num_groups", "raw_num_drivers",
-            "raw_proportion_trips", "raw_proportion_speed_limit",
-            "raw_num_fleet_policy", "raw_num_geofences", "raw_num_checklists",
-            "pct_instalation_bom", "setup_user_bom", "setup_grups_bom",
-            "setup_drivers_bom", "setup_driver_identification_bom",
-            "basic_config_speed_limit_bom", "basic_config_fleet_policy_bom",
-            "basic_config_geofences_bom", "basic_config_checklists_bom",
-        ])
         bv = run_databricks(f"""
-            SELECT {cols}
+            SELECT {", ".join(BV_COLS)}
             FROM gold.customer_success_reports.basic_value
             WHERE company_id = '{company_id}' AND data_atual_flag = true
             LIMIT 1
@@ -175,14 +187,38 @@ def _to_float(v):
 
 
 def instalacao_nao_iniciada(dados: dict) -> bool:
-    """True quando NÃO há instalação agendada E NENHUM dispositivo instalado."""
-    sup = dados["supply"]
-    bv = dados["bv"]
+    sup, bv = dados["supply"], dados["bv"]
     agendado = (sup.get("agendado") or 0) == 1
     instalado = (sup.get("instalado_flag") or 0) == 1
     completeness = _to_float(bv.get("INSTALL_COMPLETENESS")) or 0
-    tem_dispositivo = instalado or completeness > 0
-    return not agendado and not tem_dispositivo
+    return not agendado and not (instalado or completeness > 0)
+
+
+def tem_usuario_ativo(bv: dict) -> bool:
+    h = _to_float(bv.get("activation_heavy_users")) or 0
+    r = _to_float(bv.get("raw_num_heavy_users")) or 0
+    return h > 0 or r > 0
+
+
+def dias_de_jornada(bv: dict):
+    d = bv.get("data_de_assinatura_do_contrato")
+    if not d:
+        return None
+    try:
+        d = pd.to_datetime(d, utc=True).tz_localize(None)
+    except Exception:
+        d = pd.to_datetime(d)
+    hoje = pd.Timestamp.now().normalize()
+    return int((hoje - d.normalize()).days)
+
+
+def fase_atual(dias):
+    if dias is None:
+        return 0
+    for i, f in enumerate(FASES):
+        if dias <= f["fim"]:
+            return i
+    return len(FASES) - 1
 
 
 def classificar_nota(score):
@@ -196,82 +232,139 @@ def classificar_nota(score):
     return "Crítico", "#E5484D"
 
 
+def gaps_abertos(bv: dict):
+    """Lista de textos de ação dos critérios ainda não atingidos."""
+    return [txt for col, txt in GAPS if not bool(bv.get(col))]
+
+
 # ----------------------------------------------------------------------------
 # Mensagens de WhatsApp
 # ----------------------------------------------------------------------------
-def msg_boas_vindas(nome_cliente: str, empresa: str, analista: str) -> str:
-    saud = f"Olá, {nome_cliente}! Tudo bem?" if nome_cliente else "Olá! Tudo bem?"
+def msg_kickoff(nome, empresa, analista, link=None, incluir_instalacao=False):
+    saud = f"Oi, {nome}, tudo bem?" if nome else "Oi, tudo bem?"
     alvo = f"a {empresa}" if empresa else "a sua operação"
+    abertura = (
+        f"{saud}\n\n"
+        f"Sou o {analista}, da Cobli, e vou ser seu ponto de contato de treinamento "
+        f"pelos próximos 3 meses. Minha missão é simples: deixar {alvo} rodando redonda "
+        f"na plataforma e garantir que vocês sintam o valor logo nas primeiras semanas."
+    )
+    passos = []
+    if link:
+        passos.append("*Seu acesso ao painel*\n" f"É só concluir o cadastro por aqui: {link}")
+    if incluir_instalacao:
+        passos.append(
+            "*Agendamento da instalação*\n"
+            "Me manda estas informações que eu já organizo tudo com o time técnico:\n"
+            "• 2 opções de data e horário\n"
+            "• Endereço completo da instalação\n"
+            "• Nome e telefone do responsável no local\n"
+            "• Placas dos veículos"
+        )
+    corpo = ""
+    if len(passos) > 1:
+        corpo = "Para começar com o pé direito, dois passos rápidos:\n\n"
+        corpo += "\n\n".join(f"{i + 1}️⃣ {p}" for i, p in enumerate(passos))
+    elif len(passos) == 1:
+        corpo = "Para começar, um passo rápido:\n\n" + passos[0]
+    fecho = (
+        "Feito isso, o restante fica comigo e eu te mantenho por dentro de cada etapa. "
+        "Qualquer dúvida no caminho, é só me chamar por aqui. 😊"
+    )
+    partes = [abertura] + ([corpo] if corpo else []) + [fecho]
+    return "\n\n".join(partes)
+
+
+def msg_gaps(nome, empresa, analista, gaps, score):
+    saud = f"Oi, {nome}, tudo bem?" if nome else "Oi, tudo bem?"
+    if not gaps:
+        return (
+            f"{saud}\n\n"
+            f"Passando só para comemorar: {('a ' + empresa) if empresa else 'a sua frota'} "
+            f"já está com a configuração completa e o Basic Value em {_to_float(score):.1f}. "
+            f"É exatamente o patamar que a gente busca no onboarding. Sigo por aqui para o que precisar. 🎉"
+        )
+    itens = "\n".join(f"• {g}" for g in gaps)
     return (
         f"{saud}\n\n"
-        f"Sou o {analista}, analista de treinamento da Cobli, e vou acompanhar {alvo} "
-        f"de perto pelos próximos 3 meses. Meu papel é ajudar sua equipe a configurar a "
-        f"plataforma, tirar dúvidas e garantir que vocês comecem a extrair valor da "
-        f"operação o quanto antes.\n\n"
-        f"Pode contar comigo por aqui sempre que precisar. Vou estar do seu lado em cada "
-        f"etapa dessa fase inicial. 😊"
+        f"Dei uma olhada na conta de vocês e separei o que ainda falta para a frota atingir "
+        f"a configuração ideal da Cobli. Cada ponto leva poucos minutos:\n\n"
+        f"{itens}\n\n"
+        f"Consigo te mostrar como fazer cada um, com calma. Quer que a gente resolva os "
+        f"primeiros ainda essa semana? Me diz o melhor horário que eu te acompanho."
     )
 
 
-def msg_kickoff_instalacao(empresa: str) -> str:
-    alvo = f"da {empresa}" if empresa else "da sua frota"
-    return (
-        f"Para darmos início à instalação dos equipamentos {alvo}, preciso de algumas "
-        f"informações para agendar tudo com o time técnico.\n\n"
-        f"Quando puder, me envie por aqui, por favor:\n"
-        f"• 2 opções de data e horário\n"
-        f"• Endereço completo da instalação\n"
-        f"• Nome e telefone do responsável no local\n"
-        f"• Placas dos veículos\n\n"
-        f"Fico à disposição para acompanhar isso de perto e garantir que a instalação "
-        f"aconteça da melhor forma possível."
-    )
-
-
-def msg_acesso(link: str) -> str:
-    return (
-        f"Para você já começar a acessar o painel da Cobli, é só concluir seu cadastro "
-        f"por este link:\n{link}\n\n"
-        f"Qualquer dúvida no caminho, me chama por aqui."
-    )
+def msg_fase(indice, nome, empresa, score):
+    saud = f"Oi, {nome}, tudo bem?" if nome else "Oi, tudo bem?"
+    emp = empresa or "a sua frota"
+    s = _to_float(score)
+    textos = [
+        # Fase 1
+        f"{saud}\n\nBoas-vindas à Cobli! Nas próximas semanas vou te acompanhar de perto "
+        f"para deixar {emp} rodando redonda. O primeiro passo é a instalação dos equipamentos "
+        f"e o seu acesso ao painel. Me avisa a melhor data que eu já organizo tudo com o time técnico.",
+        # Fase 2
+        f"{saud}\n\nCom os equipamentos instalados, bora deixar a plataforma com a cara da sua "
+        f"operação. Nesta etapa a gente cria os usuários da equipe, organiza os veículos em grupos "
+        f"e cadastra os motoristas. Isso já te dá visão de quem dirige o quê. Quer marcar 20 minutos "
+        f"comigo para configurarmos juntos?",
+        # Fase 3
+        f"{saud}\n\nAgora vem a parte que mais gera resultado no dia a dia: configurar limite de "
+        f"velocidade, regras de política de frota, geofences e checklists. É o que transforma os "
+        f"dados da frota em ação. Posso te guiar item a item essa semana, no seu ritmo.",
+        # Fase 4
+        f"{saud}\n\nEstamos fechando seus primeiros 90 dias na Cobli. Sua frota já está em "
+        f"{s:.1f} de Basic Value" + (" e a meta é chegar a 3." if s is not None and s < 3 else ", acima da meta de 3.")
+        + " Bora revisar juntos os últimos ajustes e deixar tudo redondo antes de encerrar o onboarding?",
+    ]
+    return textos[indice]
 
 
 # ----------------------------------------------------------------------------
 # UI helpers
 # ----------------------------------------------------------------------------
-def bloco_mensagem(titulo: str, texto: str, key: str):
-    st.markdown(f"**{titulo}**")
-    st.text_area("msg", texto, height=len(texto) // 2 + 90, key=key, label_visibility="collapsed")
+def render_timeline(dias, idx_atual):
+    dias_show = "—" if dias is None else max(dias, 0)
+    cols = st.columns(len(FASES))
+    for i, (col, f) in enumerate(zip(cols, FASES)):
+        if i < idx_atual:
+            estado, cor = "✅ concluída", "#1DB954"
+        elif i == idx_atual:
+            estado, cor = "🟡 fase atual", "#F5A623"
+        else:
+            estado, cor = "⚪ a seguir", "#9AA0A6"
+        with col:
+            st.markdown(
+                f"<div style='border-top:4px solid {cor};padding-top:8px'>"
+                f"<b>{f['emoji']} Fase {i + 1}</b><br>{f['nome']}<br>"
+                f"<span style='color:{cor}'>Dias {f['ini']}–{f['fim']} · {estado}</span></div>",
+                unsafe_allow_html=True,
+            )
 
 
 def linha_criterio(label, ok, valor, unidade):
-    icon = "✅" if ok else "❌" if ok is not None else "⚪"
+    icon = "✅" if ok else "❌"
     v = _to_float(valor)
-    if v is None:
-        vtxt = "sem dado"
-    elif unidade == "%":
-        vtxt = f"{v:.0f}%"
-    else:
-        vtxt = f"{v:.0f}"
+    vtxt = "sem dado" if v is None else (f"{v:.0f}%" if unidade == "%" else f"{v:.0f}")
     st.markdown(f"{icon}  {label}  ·  **{vtxt}**")
 
 
 # ----------------------------------------------------------------------------
 # App
 # ----------------------------------------------------------------------------
-st.title("🚚 Kickoff de Onboarding · Cobli")
-st.caption("Analise o Basic Value da frota e monte o kickoff de WhatsApp a partir do Deal ID do HubSpot.")
+st.title("🚚 Jornada de Onboarding · Cobli")
+st.caption("Do kickoff aos 90 dias. Meta: Basic Value ≥ 3. A partir do Deal ID do HubSpot.")
 
 with st.sidebar:
-    st.header("Dados do kickoff")
+    st.header("Dados do cliente")
     deal_id = st.text_input("Deal ID (HubSpot)", placeholder="ex.: 47596831034")
-    email_cliente = st.text_input("E-mail do cliente (link de acesso)", placeholder="cliente@empresa.com")
     nome_cliente = st.text_input("Nome do contato", placeholder="ex.: João")
     analista = st.text_input("Seu nome (analista)", value=ANALISTA_PADRAO)
-    buscar = st.button("Analisar frota", type="primary", use_container_width=True)
+    buscar = st.button("Analisar cliente", type="primary", use_container_width=True)
 
 if not buscar:
-    st.info("Preencha o Deal ID na barra lateral e clique em **Analisar frota**.")
+    st.info("Preencha o Deal ID na barra lateral e clique em **Analisar cliente**.")
     st.stop()
 
 if not deal_id.strip():
@@ -284,90 +377,109 @@ except Exception as e:
     st.error(f"Erro ao consultar o Databricks: {e}")
     st.stop()
 
-bv = dados["bv"]
-sup = dados["supply"]
+bv, sup = dados["bv"], dados["supply"]
 empresa = (bv.get("company_name") or sup.get("company_name") or "").strip()
 nome_final = nome_cliente.strip() or (sup.get("cliente_nome") or "").strip()
+analista_final = analista.strip() or ANALISTA_PADRAO
 
 if not dados["company_id"]:
     st.warning("Não encontrei empresa associada a este Deal ID no Databricks. Confira o número.")
 
-# ---- Cabeçalho da frota ----
+score = bv.get("basic_value_score")
+dias = dias_de_jornada(bv)
+idx = fase_atual(dias)
+label, cor = classificar_nota(score)
+gaps = gaps_abertos(bv) if bv else []
+usuario_ativo = tem_usuario_ativo(bv)
+
+# ---- Cabeçalho ----
 st.subheader(empresa or f"Deal {dados['deal_id']}")
 c1, c2, c3, c4 = st.columns(4)
-score = bv.get("basic_value_score")
-label, cor = classificar_nota(score)
-c1.metric("Basic Value (0–4)", f"{_to_float(score):.2f}" if _to_float(score) is not None else "—")
+sv = _to_float(score)
+c1.metric("Basic Value", f"{sv:.2f}" if sv is not None else "—", f"meta {META_BASIC_VALUE:.0f}")
 c1.markdown(f"<span style='color:{cor};font-weight:600'>{label}</span>", unsafe_allow_html=True)
-c2.metric("Instalação", f"{_to_float(bv.get('INSTALL_COMPLETENESS')) or 0:.0f}%")
-c3.metric("CSM", bv.get("csm") or "—")
-c4.metric("Status", bv.get("status_da_empresa") or "—")
+c2.metric("Dia da jornada", f"{dias}" if dias is not None else "—", f"de {JORNADA_DIAS}")
+c3.metric("Dias restantes", f"{max(JORNADA_DIAS - dias, 0)}" if dias is not None else "—")
+c4.metric("Usuário com acesso", "Sim" if usuario_ativo else "Não")
+
+if dias is not None:
+    st.progress(min(max(dias, 0) / JORNADA_DIAS, 1.0))
 
 st.divider()
 
-# ---- Pilares ----
-if bv:
-    st.markdown("### Basic Value por pilar")
-    grade_map = {
-        "Instalação": bv.get("instalation_completeness_grade"),
-        "Setup": bv.get("setup_grade"),
-        "Configuração Básica": bv.get("basic_config_grade"),
-    }
-    cols = st.columns(3)
-    for col, (pilar, criterios) in zip(cols, CRITERIOS.items()):
-        with col:
-            g = grade_map.get(pilar)
-            st.markdown(f"#### {pilar}")
-            st.markdown(f"Nota do pilar: **{g if g is not None else '—'} / 4**")
-            for label_c, bom_col, raw_col, un in criterios:
-                ok = bv.get(bom_col)
-                ok = None if ok is None else bool(ok)
-                linha_criterio(label_c, ok, bv.get(raw_col), un)
-else:
-    st.info("Sem registro de Basic Value na semana atual para esta empresa.")
+tab_jornada, tab_msg, tab_fases = st.tabs(
+    ["📍 Linha do tempo & diagnóstico", "💬 Kickoff / próximos passos", "🗓️ Comunicações por fase"]
+)
 
-st.divider()
+# ============================ TAB 1: Jornada ============================
+with tab_jornada:
+    st.markdown("### Linha do tempo")
+    render_timeline(dias, idx)
+    st.markdown(f"**Fase atual:** {FASES[idx]['emoji']} {FASES[idx]['nome']}")
+    st.divider()
 
-# ---- Situação da instalação ----
-nao_iniciada = instalacao_nao_iniciada(dados)
-st.markdown("### Situação da instalação")
-if nao_iniciada:
-    st.error("Instalação **não iniciada**: sem agendamento e sem dispositivos instalados. Enviar kickoff de instalação.")
-else:
-    partes = []
-    if (sup.get("agendado") or 0) == 1:
-        dm = sup.get("data_marcada")
-        partes.append(f"agendada{f' para {pd.to_datetime(dm).date()}' if dm else ''}")
-    if (sup.get("instalado_flag") or 0) == 1 or (_to_float(bv.get("INSTALL_COMPLETENESS")) or 0) > 0:
-        partes.append("com dispositivos instalados")
-    st.success("Instalação " + " e ".join(partes) + "." if partes else "Instalação em andamento.")
+    st.markdown("### O que o cliente já fez")
+    if bv:
+        grade_map = {
+            "Instalação": bv.get("instalation_completeness_grade"),
+            "Setup": bv.get("setup_grade"),
+            "Configuração Básica": bv.get("basic_config_grade"),
+        }
+        cols = st.columns(3)
+        for col, (pilar, criterios) in zip(cols, CRITERIOS.items()):
+            with col:
+                g = grade_map.get(pilar)
+                st.markdown(f"#### {pilar}")
+                st.markdown(f"Nota do pilar: **{g if g is not None else '—'} / 4**")
+                for label_c, bom_col, raw_col, un in criterios:
+                    linha_criterio(label_c, bool(bv.get(bom_col)), bv.get(raw_col), un)
+        feitos = len(GAPS) - len(gaps)
+        st.info(f"Critérios concluídos: **{feitos} de {len(GAPS)}**. Faltam **{len(gaps)}** para a frota redonda.")
+    else:
+        st.info("Sem registro de Basic Value na semana atual para esta empresa.")
 
-st.divider()
+# ============================ TAB 2: Mensagens ============================
+with tab_msg:
+    st.markdown("### Este cliente já fez o kickoff via mensagem?")
+    fez_kickoff = st.radio(
+        "kickoff", ["Ainda não", "Sim, já fiz"], horizontal=True, label_visibility="collapsed"
+    )
 
-# ---- Mensagens de WhatsApp ----
-st.markdown("### Mensagens de WhatsApp")
-st.caption("Revise, ajuste se precisar e copie para o cliente.")
-
-bloco_mensagem("1. Boas-vindas", msg_boas_vindas(nome_final, empresa, analista.strip() or ANALISTA_PADRAO), "m_bv")
-
-# Acesso ao painel
-st.markdown("**2. Acesso ao painel**")
-if email_cliente.strip():
-    try:
-        link, row = get_invite_link(email_cliente.strip())
-        if link:
-            st.text_area("msg_acesso", msg_acesso(link), height=140, key="m_ac", label_visibility="collapsed")
-            st.caption(f"Convite encontrado · fleet_id: {row['fleet_id']} · criado em {row['creation_date']}")
+    if fez_kickoff == "Ainda não":
+        st.markdown("#### Mensagem de kickoff")
+        link = None
+        if not usuario_ativo:
+            st.warning("Este cliente ainda **não tem usuário com acesso** ao painel. Cole o link de convite abaixo para incluí-lo na mensagem.")
+            link_input = st.text_input(
+                "Link de acesso do cliente",
+                placeholder="https://cadastro.cobli.co/invites/XXXXXXXX",
+                help="Gere o link no severino/cadastro (dentro da rede da Cobli) e cole aqui.",
+            )
+            link = link_input.strip() or None
         else:
-            st.warning("E-mail não encontrado na base de convites (severino). Confira o e-mail ou gere um novo convite no cadastro.")
-    except Exception as e:
-        st.error(f"Erro ao consultar convites: {e}")
-else:
-    st.caption("Informe o e-mail do cliente na barra lateral para gerar o link de acesso.")
+            st.success("Cliente já tem usuário com acesso ao painel. O link de convite não é necessário.")
 
-# Kickoff de instalação (condicional)
-if nao_iniciada:
-    bloco_mensagem("3. Kickoff de instalação (agendamento)", msg_kickoff_instalacao(empresa), "m_ki")
-else:
-    st.markdown("**3. Kickoff de instalação**")
-    st.caption("Não necessário: instalação já agendada ou iniciada.")
+        msg = msg_kickoff(
+            nome_final, empresa, analista_final,
+            link=link, incluir_instalacao=instalacao_nao_iniciada(dados),
+        )
+        st.text_area("kickoff_msg", msg, height=max(340, len(msg) // 2), label_visibility="collapsed")
+    else:
+        st.markdown("#### Mensagem de próximos passos (features que faltam)")
+        if not bv:
+            st.info("Sem Basic Value para gerar a lista de pendências.")
+        else:
+            msg = msg_gaps(nome_final, empresa, analista_final, gaps, score)
+            st.text_area("gaps_msg", msg, height=max(300, len(msg) // 2), label_visibility="collapsed")
+            if gaps:
+                st.caption(f"{len(gaps)} feature(s) pendente(s) com base no Basic Value atual.")
+
+# ============================ TAB 3: Comunicações por fase ============================
+with tab_fases:
+    st.markdown("### Comunicações da jornada de 90 dias")
+    st.caption("Uma mensagem por fase. A fase atual já vem aberta. Revise e copie quando for a hora de cada uma.")
+    for i, f in enumerate(FASES):
+        marca = " · fase atual" if i == idx else ""
+        with st.expander(f"{f['emoji']} Fase {i + 1}: {f['nome']} (dias {f['ini']}–{f['fim']}){marca}", expanded=(i == idx)):
+            texto = msg_fase(i, nome_final, empresa, score)
+            st.text_area(f"fase_{i}", texto, height=max(220, len(texto) // 2), label_visibility="collapsed")
