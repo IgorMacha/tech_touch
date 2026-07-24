@@ -572,8 +572,9 @@ def gerar_mensagem_ia(model, fatos, base, objetivo, tom, curto=True):
         return None
     fatos_txt = "\n".join(f"- {k}: {v}" for k, v in fatos.items())
     regra_curto = (
-        "\n\nIMPORTANTE: escreva uma mensagem CURTA e escaneável para WhatsApp: vá direto ao ponto, "
-        "poucas linhas, sem parágrafos longos. Mantenha os links e os itens da lista."
+        "\n\nESTILO: mensagem de WhatsApp de tamanho médio, bem escrita e específica (nada genérico). "
+        "Conecte a ação a um ganho concreto para a frota do cliente. Escaneável: algumas linhas e no máximo "
+        "uma lista curta. Nem telegráfica, nem um textão."
     ) if curto else ""
     user = (
         f"Objetivo da mensagem: {objetivo}\n"
@@ -597,41 +598,61 @@ def gerar_mensagem_ia(model, fatos, base, objetivo, tom, curto=True):
     return resp.choices[0].message.content.strip()
 
 
-def gerar_passos_plano(model, fatos, gaps, dias, tom):
+def gerar_passos_plano(model, fatos, gaps, dias, tom, analista="", nao_iniciada=False, data_min=""):
     """Plano estruturado: uma comunicação por feature pendente, com mini passo a passo do manual.
-    Retorna lista de dicts {i, quando, porque, mensagem} alinhada à ordem de `gaps`."""
+    Retorna lista de dicts {i, quando, porque, mensagem} alinhada à ordem de `gaps`.
+    O primeiro passo, quando a instalação ainda não começou, se apresenta e coleta os dados de instalação."""
     client = _openai_client()
     if client is None:
         return []
     restam = (max(JORNADA_DIAS - dias, 0) if dias is not None else None)
     fatos_txt = "\n".join(f"- {k}: {v}" for k, v in fatos.items())
-    itens = [{"i": i, "feature": t, "passos_manual": MANUAL_STEPS.get(c, "")}
-             for i, (c, t) in enumerate(gaps)]
+    itens = []
+    for i, (c, t) in enumerate(gaps):
+        item = {"i": i, "feature": t, "passos_manual": MANUAL_STEPS.get(c, "")}
+        if c == "instalation_completeness_grade_bom" and nao_iniciada:
+            item["tipo"] = "coleta_instalacao"
+            item["apresentar_analista"] = analista or "o analista de onboarding da Cobli"
+            item["campos_para_coletar"] = [
+                f"2 opções de data e horário a partir de {data_min}" if data_min else "2 opções de data e horário",
+                "Endereço completo da instalação",
+                "Nome e telefone do responsável no local",
+                "Placas dos veículos",
+            ]
+        itens.append(item)
     user = (
         f"Tom desejado: {tom}\n"
         f"Dias restantes até o dia {JORNADA_DIAS}: {restam if restam is not None else 'não informado'}\n"
-        f"Objetivo: levar o cliente ao Basic Value 3 (não precisa chegar a 4).\n\n"
+        f"Objetivo: levar o cliente ao Basic Value 3 (não precisa chegar a 4). "
+        f"Indique apenas as features pendentes, uma por comunicação.\n\n"
         f"FATOS DO CLIENTE (use SOMENTE estes, não invente números, nomes ou datas):\n{fatos_txt}\n\n"
-        f"FEATURES PENDENTES, em ordem de prioridade (uma por comunicação), com o passo a passo real do manual:\n"
+        f"FEATURES PENDENTES, em ordem de prioridade, com o passo a passo real do manual:\n"
         f"{json.dumps(itens, ensure_ascii=False, indent=2)}\n\n"
-        f"Tarefa: para CADA feature, na ordem, escreva UMA comunicação de WhatsApp curta no tom da Cobli com: "
-        f"saudação breve, 1 frase do porquê aquilo ajuda, um mini passo a passo de 2 a 3 passos RESUMIDO a partir "
-        f"de 'passos_manual' (não invente telas que não estejam ali) e uma frase de convite. "
+        f"Escreva, para CADA feature na ordem, UMA mensagem de WhatsApp no tom da Cobli. "
+        f"Qualidade das mensagens (importante): nada genérico. Conecte a feature a um ganho concreto para a "
+        f"frota do cliente, seja específico e caloroso, escreva bem. Tamanho médio de WhatsApp: algumas linhas, "
+        f"escaneável, com no máximo uma lista curta. Nem telegráfica, nem um textão.\n"
+        f"Estrutura de cada mensagem: saudação breve com o nome do contato quando houver; 1 a 2 frases do porquê "
+        f"aquilo ajuda a operação; um mini passo a passo de 2 a 3 passos RESUMIDO a partir de 'passos_manual' "
+        f"(não invente telas que não estejam ali); e uma frase de convite para fazer junto.\n"
+        f"REGRA ESPECIAL: se um item tiver 'tipo' = 'coleta_instalacao', essa mensagem é o primeiro contato. "
+        f"Nela você deve: (1) se apresentar como {analista or 'o analista de onboarding'}, dizendo que vai "
+        f"acompanhar o cliente nos próximos 3 meses; (2) explicar em 1 frase que a instalação dos equipamentos "
+        f"é o primeiro passo para tudo funcionar; (3) pedir EXATAMENTE os itens de 'campos_para_coletar', em "
+        f"bullets com •. Nesse item não use passo a passo de sistema.\n"
         f"Sem links, sem markdown de link, sem colar URLs.\n"
-        f"Responda SOMENTE em JSON válido no formato: "
+        f"Responda SOMENTE em JSON válido: "
         f'{{"passos":[{{"i":0,"quando":"Dias X a Y","porque":"resumo de 1 linha","mensagem":"texto do whatsapp"}}]}} '
-        f"com um objeto por feature, mantendo os mesmos índices i e a mesma ordem. "
-        f"Distribua 'quando' pelos dias restantes de forma realista."
+        f"com um objeto por feature, mesmos índices i e mesma ordem. Distribua 'quando' pelos dias restantes."
     )
     resp = client.chat.completions.create(
-        model=model, temperature=0.4,
+        model=model, temperature=0.5,
         response_format={"type": "json_object"},
         messages=[{"role": "system", "content": SYSTEM_TOM_COBLI},
                   {"role": "user", "content": user}],
     )
     data = json.loads(resp.choices[0].message.content)
-    passos = data.get("passos", []) if isinstance(data, dict) else []
-    return passos
+    return data.get("passos", []) if isinstance(data, dict) else []
 
 
 # ----------------------------------------------------------------------------
@@ -910,10 +931,13 @@ with tab_plano:
     else:
         ss_plano = f"passos_{dados['hs_id']}_{modelo_ia}"
         ss_err = ss_plano + "_err"
+        data_min_inst = (pd.Timestamp.now() + pd.Timedelta(days=3)).strftime("%d/%m")
         if st.button("🔄 Gerar / atualizar plano", key="btn_plano") or ss_plano not in st.session_state:
             with st.spinner("Montando o caminho com IA (meta: Basic Value 3)..."):
                 try:
-                    st.session_state[ss_plano] = gerar_passos_plano(modelo_ia, fatos, gaps, dias, tom_ia)
+                    st.session_state[ss_plano] = gerar_passos_plano(
+                        modelo_ia, fatos, gaps, dias, tom_ia,
+                        analista=analista_final, nao_iniciada=_nao_iniciada, data_min=data_min_inst)
                     st.session_state[ss_err] = ""
                 except Exception as e:
                     st.session_state[ss_plano] = []
