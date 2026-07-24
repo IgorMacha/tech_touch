@@ -734,7 +734,6 @@ def render_indicacao(base_msg, objetivo, key, fatos, telefone, modo_ia, model, t
         st.text_area(f"ind_{key}", base_msg, height=max(300, len(base_msg) // 2),
                      key=f"ta_{key}", label_visibility="collapsed")
         botao_whatsapp(base_msg, telefone, f"wa_{key}")
-        bloco_ia(base_msg, fatos, objetivo, telefone, f"m_{key}", model, tom)
 
 
 def mostrar_videos(cols, base_url, prefix=""):
@@ -839,10 +838,14 @@ if dias is not None:
 
 st.divider()
 
-tab_jornada, tab_msg, tab_fases, tab_plano = st.tabs(
-    ["📍 Linha do tempo & diagnóstico", "💬 Kickoff / próximos passos",
-     "🗓️ Comunicações por fase", "🧭 Plano IA (até o dia 90)"]
-)
+if modo_ia:
+    tab_jornada, tab_msg, tab_plano = st.tabs(
+        ["📍 Linha do tempo & diagnóstico", "💬 Kickoff", "🧭 Plano IA (até o dia 90)"])
+    tab_fases = None
+else:
+    tab_jornada, tab_msg, tab_fases = st.tabs(
+        ["📍 Linha do tempo & diagnóstico", "💬 Kickoff / próximos passos", "🗓️ Comunicações por fase"])
+    tab_plano = None
 
 # ============================ TAB 1 ============================
 with tab_jornada:
@@ -905,8 +908,9 @@ with tab_msg:
                 st.divider()
                 mostrar_videos([c for c, _ in gaps], base_url, prefix="gaps")
 
-# ============================ TAB 3 ============================
-with tab_fases:
+# ============================ TAB 3 (só no modo Padrão) ============================
+if tab_fases is not None:
+  with tab_fases:
     st.markdown("### Comunicações da jornada de 90 dias")
     st.caption("Cada fase traz a comunicação com base no Basic Value: só entram os passos ainda pendentes, com o vídeo de cada um.")
     for i, f in enumerate(FASES):
@@ -918,13 +922,12 @@ with tab_fases:
             pend_cols = [c for c, _ in (gaps_abertos(bv) if i == 3 else pendentes_da_fase(i, bv))]
             mostrar_videos(pend_cols, base_url, prefix=f"fase{i}")
 
-# ============================ TAB 4: Plano IA ============================
-with tab_plano:
+# ============================ TAB 4: Plano IA (só no modo IA) ============================
+if tab_plano is not None:
+  with tab_plano:
     st.markdown("### Plano sugerido pela IA até o dia 90")
     st.caption("A IA indica uma feature por vez, com um mini passo a passo do manual, até alcançar o Basic Value 3.")
-    if not modo_ia:
-        st.info("Selecione o modo **IA** na barra lateral para a IA montar o plano.")
-    elif not ia_disponivel():
+    if not ia_disponivel():
         st.info("Configure a chave da OpenAI em [openai] no secrets para gerar o plano.")
     elif not bv:
         st.info("Sem Basic Value para este cliente.")
