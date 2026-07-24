@@ -11,6 +11,7 @@ Como rodar:
     streamlit run app.py
 """
 
+import json
 import os
 import re
 from urllib.parse import quote
@@ -120,6 +121,28 @@ MANUAL_REF = {
     "basic_config_geofences_bom": "Locais de interesse (geofences): áreas no mapa (garagem, cliente, filial) que registram entradas e saídas e podem disparar alertas.",
     "basic_config_checklists_bom": "Checklists: formulários digitais que o motorista preenche no app para inspeção ou vistoria, com as respostas chegando no painel.",
     "instalation_completeness_grade_bom": "Instalação: equipamentos nos veículos que ligam a telemetria e são a base para todo o resto.",
+}
+
+# Passo a passo resumido, extraído do manual da Cobli (para a IA condensar, sem inventar telas).
+MANUAL_STEPS = {
+    "setup_user_bom": "No menu Configurações > Usuários, clique em Convidar usuários, informe o e-mail, "
+                      "escolha a função (ex.: Gestão de frota) e o acesso, revise os grupos e envie o convite.",
+    "setup_grups_bom": "No menu Minha Frota > Grupos de Veículos, clique em Criar grupo, dê um nome único, "
+                       "marque os veículos que fazem parte e salve.",
+    "setup_drivers_bom": "No menu Minha Frota > Motoristas, clique em + Adicionar motorista, preencha nome, "
+                         "CPF, telefone e CNH, e salve.",
+    "setup_driver_identification_bom": "O ideal é o motorista se identificar pelo app da Cobli ou por RFID. "
+                                       "Para ajustar manualmente, use Associação de trechos: escolha a viagem pela "
+                                       "placa e data, marque a troca de condutor e vincule cada trecho ao motorista.",
+    "basic_config_speed_limit_bom": "Em Minha Frota > Veículos, edite o veículo e informe a velocidade máxima. "
+                                    "Se houver o banner 'Corrigir veículos', dá para ajustar vários de uma vez.",
+    "basic_config_fleet_policy_bom": "Em Operação > Alertas, clique em + Nova regra, escolha o tipo (velocidade, "
+                                     "local, motor ocioso, fadiga...), defina as condições e os destinatários e salve.",
+    "basic_config_geofences_bom": "Em Operação > Locais de Interesse, clique em + Criar local, dê um nome, "
+                                  "desenhe a área no mapa cobrindo só o necessário e salve.",
+    "basic_config_checklists_bom": "Na tela de Checklists, clique em criar checklist, dê um nome, adicione os itens "
+                                   "(com foto ou comentário quando precisar) e publique para a equipe.",
+    "instalation_completeness_grade_bom": "Agende a instalação dos equipamentos com o time técnico e acompanhe a conclusão.",
 }
 
 CRITERIOS = {
@@ -574,36 +597,41 @@ def gerar_mensagem_ia(model, fatos, base, objetivo, tom, curto=True):
     return resp.choices[0].message.content.strip()
 
 
-def gerar_plano_ia(model, fatos, gaps, dias, score, tom):
-    """Plano da IA: caminho até o dia 90, uma feature por vez, meta Basic Value 3."""
+def gerar_passos_plano(model, fatos, gaps, dias, tom):
+    """Plano estruturado: uma comunicação por feature pendente, com mini passo a passo do manual.
+    Retorna lista de dicts {i, quando, porque, mensagem} alinhada à ordem de `gaps`."""
     client = _openai_client()
     if client is None:
-        return None
-    fatos_txt = "\n".join(f"- {k}: {v}" for k, v in fatos.items())
-    seq = "\n".join(f"{i + 1}. {t}" for i, (c, t) in enumerate(gaps))
+        return []
     restam = (max(JORNADA_DIAS - dias, 0) if dias is not None else None)
-    s = _to_float(score)
-    nota = f"{s:.2f}".replace(".", ",") if s is not None else "sem nota"
+    fatos_txt = "\n".join(f"- {k}: {v}" for k, v in fatos.items())
+    itens = [{"i": i, "feature": t, "passos_manual": MANUAL_STEPS.get(c, "")}
+             for i, (c, t) in enumerate(gaps)]
     user = (
-        f"Tom desejado: {tom}\n\n"
-        f"FATOS REAIS DO CLIENTE (use somente estes, não invente):\n{fatos_txt}\n\n"
-        f"Basic Value atual: {nota}. Meta: 3 (não precisa chegar a 4).\n"
-        f"Dias restantes até o fim da jornada de {JORNADA_DIAS} dias: "
-        f"{restam if restam is not None else 'não informado'}.\n\n"
-        f"Pendências em ordem de prioridade (uma por vez):\n{seq}\n\n"
-        f"Tarefa: monte um PLANO objetivo do caminho do cliente até o dia 90 para alcançar o Basic Value 3. "
-        f"Regras: indicar UMA feature por vez, seguindo a ordem acima; para cada passo traga (a) a feature, "
-        f"(b) uma linha curta do porquê interpretando os dados, e (c) uma mensagem CURTA de WhatsApp pronta "
-        f"para enviar naquele passo. Sugira quando enviar cada passo distribuindo pelos dias restantes. "
-        f"Pare quando o cliente atingir o Basic Value 3, mesmo que sobrem pendências. "
-        f"Não use links nem markdown de link. Seja conciso, uma seção curta por passo."
+        f"Tom desejado: {tom}\n"
+        f"Dias restantes até o dia {JORNADA_DIAS}: {restam if restam is not None else 'não informado'}\n"
+        f"Objetivo: levar o cliente ao Basic Value 3 (não precisa chegar a 4).\n\n"
+        f"FATOS DO CLIENTE (use SOMENTE estes, não invente números, nomes ou datas):\n{fatos_txt}\n\n"
+        f"FEATURES PENDENTES, em ordem de prioridade (uma por comunicação), com o passo a passo real do manual:\n"
+        f"{json.dumps(itens, ensure_ascii=False, indent=2)}\n\n"
+        f"Tarefa: para CADA feature, na ordem, escreva UMA comunicação de WhatsApp curta no tom da Cobli com: "
+        f"saudação breve, 1 frase do porquê aquilo ajuda, um mini passo a passo de 2 a 3 passos RESUMIDO a partir "
+        f"de 'passos_manual' (não invente telas que não estejam ali) e uma frase de convite. "
+        f"Sem links, sem markdown de link, sem colar URLs.\n"
+        f"Responda SOMENTE em JSON válido no formato: "
+        f'{{"passos":[{{"i":0,"quando":"Dias X a Y","porque":"resumo de 1 linha","mensagem":"texto do whatsapp"}}]}} '
+        f"com um objeto por feature, mantendo os mesmos índices i e a mesma ordem. "
+        f"Distribua 'quando' pelos dias restantes de forma realista."
     )
     resp = client.chat.completions.create(
-        model=model, temperature=0.5,
+        model=model, temperature=0.4,
+        response_format={"type": "json_object"},
         messages=[{"role": "system", "content": SYSTEM_TOM_COBLI},
                   {"role": "user", "content": user}],
     )
-    return resp.choices[0].message.content.strip()
+    data = json.loads(resp.choices[0].message.content)
+    passos = data.get("passos", []) if isinstance(data, dict) else []
+    return passos
 
 
 # ----------------------------------------------------------------------------
@@ -870,7 +898,7 @@ with tab_fases:
 # ============================ TAB 4: Plano IA ============================
 with tab_plano:
     st.markdown("### Plano sugerido pela IA até o dia 90")
-    st.caption("A IA indica o caminho do cliente, uma feature por vez, até alcançar o Basic Value 3.")
+    st.caption("A IA indica uma feature por vez, com um mini passo a passo do manual, até alcançar o Basic Value 3.")
     if not modo_ia:
         st.info("Selecione o modo **IA** na barra lateral para a IA montar o plano.")
     elif not ia_disponivel():
@@ -880,15 +908,33 @@ with tab_plano:
     elif not gaps:
         st.success("Cliente já sem pendências para a meta. Não há caminho a sugerir. 🎉")
     else:
-        ss_plano = f"plano_{dados['hs_id']}_{modelo_ia}"
+        ss_plano = f"passos_{dados['hs_id']}_{modelo_ia}"
+        ss_err = ss_plano + "_err"
         if st.button("🔄 Gerar / atualizar plano", key="btn_plano") or ss_plano not in st.session_state:
             with st.spinner("Montando o caminho com IA (meta: Basic Value 3)..."):
                 try:
-                    st.session_state[ss_plano] = gerar_plano_ia(modelo_ia, fatos, gaps, dias, score, tom_ia)
+                    st.session_state[ss_plano] = gerar_passos_plano(modelo_ia, fatos, gaps, dias, tom_ia)
+                    st.session_state[ss_err] = ""
                 except Exception as e:
-                    st.session_state[ss_plano] = f"[Falha ao gerar o plano: {e}]"
-        plano = st.session_state.get(ss_plano)
-        if plano:
-            st.text_area("plano_ia", plano, height=max(380, len(plano) // 2),
-                         key="ta_plano", label_visibility="collapsed")
-            st.caption(f"Plano gerado por IA ({modelo_ia}). Meta: Basic Value 3 (não precisa chegar a 4). Revise antes de usar.")
+                    st.session_state[ss_plano] = []
+                    st.session_state[ss_err] = str(e)
+        passos = st.session_state.get(ss_plano) or []
+        por_i = {p.get("i"): p for p in passos if isinstance(p, dict)}
+        if st.session_state.get(ss_err):
+            st.error(f"Falha ao gerar o plano: {st.session_state[ss_err]}")
+        st.caption(f"Meta: Basic Value 3. {len(gaps)} passo(s), uma comunicação por feature. Revise antes de enviar.")
+        for i, (c, t) in enumerate(gaps):
+            p = por_i.get(i, {})
+            quando = (p.get("quando") or "").strip()
+            header = f"🧭 Passo {i + 1}: {t}" + (f" · {quando}" if quando else "")
+            with st.expander(header, expanded=(i == 0)):
+                if p.get("porque"):
+                    st.caption(p["porque"])
+                msg = (p.get("mensagem") or "").strip()
+                if msg:
+                    st.text_area(f"plano_msg_{i}", msg, height=max(200, len(msg) // 2),
+                                 key=f"ta_plano_{i}", label_visibility="collapsed")
+                    botao_whatsapp(msg, telefone_final, f"waplano_{i}")
+                else:
+                    st.info("Sem mensagem gerada para este passo. Clique em regenerar.")
+                mostrar_videos([c], base_url, prefix=f"plano{i}")
