@@ -1,4 +1,4 @@
-"""
+="""
 Cobli - Onboarding Tech Touch | Jornada de 90 dias
 ===================================================
 A partir do ID da empresa (HubSpot), posiciona o cliente na jornada de 90 dias
@@ -574,6 +574,38 @@ def gerar_mensagem_ia(model, fatos, base, objetivo, tom, curto=True):
     return resp.choices[0].message.content.strip()
 
 
+def gerar_plano_ia(model, fatos, gaps, dias, score, tom):
+    """Plano da IA: caminho até o dia 90, uma feature por vez, meta Basic Value 3."""
+    client = _openai_client()
+    if client is None:
+        return None
+    fatos_txt = "\n".join(f"- {k}: {v}" for k, v in fatos.items())
+    seq = "\n".join(f"{i + 1}. {t}" for i, (c, t) in enumerate(gaps))
+    restam = (max(JORNADA_DIAS - dias, 0) if dias is not None else None)
+    s = _to_float(score)
+    nota = f"{s:.2f}".replace(".", ",") if s is not None else "sem nota"
+    user = (
+        f"Tom desejado: {tom}\n\n"
+        f"FATOS REAIS DO CLIENTE (use somente estes, não invente):\n{fatos_txt}\n\n"
+        f"Basic Value atual: {nota}. Meta: 3 (não precisa chegar a 4).\n"
+        f"Dias restantes até o fim da jornada de {JORNADA_DIAS} dias: "
+        f"{restam if restam is not None else 'não informado'}.\n\n"
+        f"Pendências em ordem de prioridade (uma por vez):\n{seq}\n\n"
+        f"Tarefa: monte um PLANO objetivo do caminho do cliente até o dia 90 para alcançar o Basic Value 3. "
+        f"Regras: indicar UMA feature por vez, seguindo a ordem acima; para cada passo traga (a) a feature, "
+        f"(b) uma linha curta do porquê interpretando os dados, e (c) uma mensagem CURTA de WhatsApp pronta "
+        f"para enviar naquele passo. Sugira quando enviar cada passo distribuindo pelos dias restantes. "
+        f"Pare quando o cliente atingir o Basic Value 3, mesmo que sobrem pendências. "
+        f"Não use links nem markdown de link. Seja conciso, uma seção curta por passo."
+    )
+    resp = client.chat.completions.create(
+        model=model, temperature=0.5,
+        messages=[{"role": "system", "content": SYSTEM_TOM_COBLI},
+                  {"role": "user", "content": user}],
+    )
+    return resp.choices[0].message.content.strip()
+
+
 # ----------------------------------------------------------------------------
 # UI helpers
 # ----------------------------------------------------------------------------
@@ -756,8 +788,9 @@ if dias is not None:
 
 st.divider()
 
-tab_jornada, tab_msg, tab_fases = st.tabs(
-    ["📍 Linha do tempo & diagnóstico", "💬 Kickoff / próximos passos", "🗓️ Comunicações por fase"]
+tab_jornada, tab_msg, tab_fases, tab_plano = st.tabs(
+    ["📍 Linha do tempo & diagnóstico", "💬 Kickoff / próximos passos",
+     "🗓️ Comunicações por fase", "🧭 Plano IA (até o dia 90)"]
 )
 
 # ============================ TAB 1 ============================
@@ -833,3 +866,29 @@ with tab_fases:
                              f"{dados['hs_id']}_fase{i}", fatos, telefone_final, modo_ia, modelo_ia, tom_ia)
             pend_cols = [c for c, _ in (gaps_abertos(bv) if i == 3 else pendentes_da_fase(i, bv))]
             mostrar_videos(pend_cols, base_url, prefix=f"fase{i}")
+
+# ============================ TAB 4: Plano IA ============================
+with tab_plano:
+    st.markdown("### Plano sugerido pela IA até o dia 90")
+    st.caption("A IA indica o caminho do cliente, uma feature por vez, até alcançar o Basic Value 3.")
+    if not modo_ia:
+        st.info("Selecione o modo **IA** na barra lateral para a IA montar o plano.")
+    elif not ia_disponivel():
+        st.info("Configure a chave da OpenAI em [openai] no secrets para gerar o plano.")
+    elif not bv:
+        st.info("Sem Basic Value para este cliente.")
+    elif not gaps:
+        st.success("Cliente já sem pendências para a meta. Não há caminho a sugerir. 🎉")
+    else:
+        ss_plano = f"plano_{dados['hs_id']}_{modelo_ia}"
+        if st.button("🔄 Gerar / atualizar plano", key="btn_plano") or ss_plano not in st.session_state:
+            with st.spinner("Montando o caminho com IA (meta: Basic Value 3)..."):
+                try:
+                    st.session_state[ss_plano] = gerar_plano_ia(modelo_ia, fatos, gaps, dias, score, tom_ia)
+                except Exception as e:
+                    st.session_state[ss_plano] = f"[Falha ao gerar o plano: {e}]"
+        plano = st.session_state.get(ss_plano)
+        if plano:
+            st.text_area("plano_ia", plano, height=max(380, len(plano) // 2),
+                         key="ta_plano", label_visibility="collapsed")
+            st.caption(f"Plano gerado por IA ({modelo_ia}). Meta: Basic Value 3 (não precisa chegar a 4). Revise antes de usar.")
