@@ -1,4 +1,4 @@
-="""
+"""
 Cobli - Onboarding Tech Touch | Jornada de 90 dias
 ===================================================
 A partir do ID da empresa (HubSpot), posiciona o cliente na jornada de 90 dias
